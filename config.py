@@ -1,36 +1,19 @@
-from dotenv import load_dotenv
-import os
+# config.py in root directory
+from app.config import ConfigFactory
 
-load_dotenv()  # Load once on app startup
-
+# Create a compatibility class
 class Config:
-    # Elasticsearch
-    ES_CLOUD_ID: str = os.getenv("ES_CLOUD_ID")
-    ES_API_KEY: str = os.getenv("ES_API_KEY")
+    """Compatibility wrapper for old Config class"""
     
-    # OpenAI
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
-
-    # MongoDB
-    MONGO_URL: str = os.getenv("MONGO_URL")
-
-    # MySQL
-    MYSQL_HOST: str = os.getenv("MYSQL_HOST")
-    MYSQL_USERNAME: str = os.getenv("MYSQL_USERNAME")
-    MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD")
-    MYSQL_PORT: int = int(os.getenv("MYSQL_PORT", 3306))
+    # Get the actual config
+    _config = ConfigFactory.get_config('default')
     
-    # App Settings
-    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
-    
-    @classmethod
-    def validate(cls):
-        missing = [var for var, value in vars(cls).items() 
-                 if not var.startswith("__") and value is None]
-        if missing:
-            raise EnvironmentError(
-                f"Missing environment variables: {', '.join(missing)}"
-            )
-
-# Validate on import
-Config.validate()
+    # Define properties that redirect to the new config
+    ES_CLOUD_ID = _config.ES_CLOUD_ID
+    ES_API_KEY = _config.ES_API_KEY
+    OPENAI_API_KEY = _config.OPENAI_API_KEY
+    MONGO_URL = _config.MONGO_URL
+    MYSQL_HOST = _config.MYSQL_HOST
+    MYSQL_USERNAME = _config.MYSQL_USERNAME
+    MYSQL_PASSWORD = _config.MYSQL_PASSWORD
+    MYSQL_PORT = _config.MYSQL_PORT
