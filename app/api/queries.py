@@ -47,7 +47,7 @@ def trial_ask():
     # Apply rate limiting
     limiter = get_limiter()
     if limiter:
-        limiter.limit("100 per minute")(trial_ask)
+        limiter.limit("20 per minute")(trial_ask)
     
     # Process query
     data = request.get_json()
