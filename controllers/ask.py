@@ -25,8 +25,15 @@ from controllers.doc_summary import summarize_document
 from utils.extractText import clean_filename
 from config import Config
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Load configuration
 openai_api_key = Config.OPENAI_API_KEY
 
+# ----------------------------------------
+# Context Retrieval Functions
+# ----------------------------------------
 
 def checkPreviousQn(usersession):
     """
@@ -60,46 +67,106 @@ def get_relevant_context(usersession, user_question):
     Returns:
         tuple: Formatted context, file name, and page number
     """
-    # Retrieve documents using Elastic search
-    retriever = ElasticRetriever(usersession)
-    docs = retriever.search(user_question)
-
-    if not docs:
-        return None, None, None
-    
-    # Extract page number and file name of the first document
-    pageNo = 0
-    fileName = ''
     try:
-        actual_metadata = docs[0].metadata.get('_source', {}).get('metadata', {})
-        # Get filename directly from metadata or from source path
-        fileName = actual_metadata.get('filename', '')
-        if not fileName:
-            source = actual_metadata.get('source', '')
-            fileName = clean_filename(source)
-        pageNo = actual_metadata.get('page', 0) + 1
-        logging.info(f'File name: {fileName}')
-        logging.info(f'Page number: {pageNo}')
-    except Exception as e: 
-        logging.info(f'Error in getting source: {e}')
-    
-    # Process document information
-    try:
-        docs = extract_doc_info(docs)[:10]
-    except Exception as e:
-        logging.info(f'Error in restructuring documents: {e}')
+        # Retrieve documents using Elastic search
+        retriever = ElasticRetriever(usersession)
+        docs = retriever.search(user_question)
 
-    # Format context for LLM
-    formatted_context = ""
-    for i, chunk in enumerate(docs, start=1):
+        if not docs:
+            return None, None, None
+        
+        # Extract page number and file name of the first document
+        pageNo = 0
+        fileName = ''
         try:
-            formatted_context += f"[{i}] \"{chunk['text']}\"  \n(Source: {chunk['source']}, Page {chunk['page']})\n\n"
+            actual_metadata = docs[0].metadata.get('_source', {}).get('metadata', {})
+            # Get filename directly from metadata or from source path
+            fileName = actual_metadata.get('filename', '')
+            if not fileName:
+                source = actual_metadata.get('source', '')
+                fileName = clean_filename(source)
+            pageNo = actual_metadata.get('page', 0) + 1
+            logger.info(f'File name: {fileName}')
+            logger.info(f'Page number: {pageNo}')
+        except Exception as e: 
+            logger.error(f'Error extracting metadata: {e}')
+        
+        # Process document information
+        try:
+            docs = extract_doc_info(docs)[:10]
         except Exception as e:
-            logging.info(f'Error in formatting context: {e}')
-            continue
-    
-    return formatted_context, fileName, pageNo
+            logger.error(f'Error restructuring documents: {e}')
 
+        # Format context for LLM
+        formatted_context = ""
+        for i, chunk in enumerate(docs, start=1):
+            try:
+                formatted_context += f"[{i}] \"{chunk['text']}\"  \n(Source: {chunk['source']}, Page {chunk['page']})\n\n"
+            except Exception as e:
+                logger.error(f'Error formatting context: {e}')
+                continue
+        
+        return formatted_context, fileName, pageNo
+    except Exception as e:
+        logger.error(f'Error retrieving context: {e}')
+        return None, None, None
+
+
+def extract_doc_info(docs):
+    """
+    Extract and process information from search results.
+    
+    Args:
+        docs (list): List of document objects from search results
+        
+    Returns:
+        list: Processed list of document information
+    """
+    extracted = []
+    
+    try:
+        # Set threshold score as median of first few documents
+        threshold_score = (
+            docs[1].metadata.get("_score") or 
+            docs[1].metadata.get("_source", {}).get("_score") or 
+            3
+        )
+    except Exception as e:  
+        logger.warning(f'Error determining threshold score: {e}')
+        threshold_score = 3
+    
+    for doc in docs:
+        try:
+            # Extract metadata
+            meta = (
+                doc.metadata.get('_source', {}).get('metadata', {}) 
+                if '_source' in doc.metadata else doc.metadata
+            )
+            source = meta.get('source', '')
+            filename = meta.get('filename', '')  # Get filename directly from metadata
+            page = meta.get('page', 0) + 1
+            
+            # If filename is missing but source exists, extract clean filename from source
+            if not filename and source:
+                filename = clean_filename(source)
+            
+            logger.debug(f'File name: {filename}, page number: {page}')
+            
+            # Add document info to extracted list
+            extracted.append({
+                "text": doc.page_content,
+                "source": filename,
+                "page": page
+            })
+        except Exception as e:
+            logger.warning(f"Failed to extract from doc: {e}")
+    
+    return extracted
+
+
+# ----------------------------------------
+# Query Intent Classification
+# ----------------------------------------
 
 def is_summary_query(query):
     """
@@ -136,79 +203,21 @@ def is_summary_query(query):
     User question:
     {query}"""
     
-    llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
-    response = llm.invoke(prompt)
-    logging.info(f'{response.content} llm response: {response}')
-    
-    num = int(response.content)
-    logging.info(num)
-    
-    return bool(num)
-
-
-def extract_doc_info(docs):
-    """
-    Extract and process information from search results.
-    
-    Args:
-        docs (list): List of document objects from search results
-        
-    Returns:
-        list: Processed list of document information
-    """
-    extracted = []
-    
     try:
-        # Set threshold score as median of first few documents
-        threshold_score = (
-            docs[1].metadata.get("_score") or 
-            docs[1].metadata.get("_source", {}).get("_score") or 
-            3
-        )
-    except Exception as e:  
-        logging.info(f'Error in threshold score: {e}')
-        threshold_score = 3
-    
-    for doc in docs:
-        try:
-            # Extract metadata
-            meta = (
-                doc.metadata.get('_source', {}).get('metadata', {}) 
-                if '_source' in doc.metadata else doc.metadata
-            )
-            source = meta.get('source', '')
-            filename = meta.get('filename', '')  # Get filename directly from metadata
-            page = meta.get('page', 0) + 1
-            
-            # If filename is missing but source exists, extract clean filename from source
-            if not filename and source:
-                filename = clean_filename(source)
-            
-            logging.info(f'File name: {filename}, page number: {page}')
-            
-            # Check document score
-            # score = (
-            #     doc.metadata.get("_score") or 
-            #     doc.metadata.get("_source", {}).get("_score") or 
-            #     threshold_score
-            # )
-            
-            # if extracted and (not score or score < threshold_score):
-            #     continue
-                
-            # logging.info(f'Score: {score}')
+        llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
+        response = llm.invoke(prompt)
+        logger.info(f'Summary classification response: {response.content}')
+        
+        num = int(response.content)
+        return bool(num)
+    except Exception as e:
+        logger.error(f'Error classifying query intent: {e}')
+        return False
 
-            # Add document info to extracted list
-            extracted.append({
-                "text": doc.page_content,
-                "source": filename,
-                "page": page
-            })
-        except Exception as e:
-            logging.warning(f"Failed to extract from doc: {e}")
-    
-    return extracted
 
+# ----------------------------------------
+# Response Processing Functions
+# ----------------------------------------
 
 def extract_structured_response(response):
     """
@@ -220,7 +229,6 @@ def extract_structured_response(response):
     Returns:
         tuple: (answer, sources, questions)
     """
-    
     # Pre-clean response
     cleaned = re.sub(r'(?i)json\s*:', '', response)  # Remove JSON: prefixes
     cleaned = cleaned.strip("` \n")  # Remove code block markers
@@ -250,7 +258,15 @@ def extract_structured_response(response):
     return extract_data(cleaned)
 
 def validate_structure(parsed):
-    """Ensure required fields exist with proper types"""
+    """
+    Ensure required fields exist with proper types.
+    
+    Args:
+        parsed (dict): Parsed JSON structure
+        
+    Returns:
+        tuple: (answer, sources, questions)
+    """
     return (
         parsed.get('answer', ''),
         parsed.get('sources', []),
@@ -322,7 +338,7 @@ def extract_data(response):
                 result['questions'] = _extract_questions(content)
         
     except Exception as e:
-        logging.error(f"Error extracting structured response: {e}")
+        logger.error(f"Error extracting structured response: {e}")
     
     return result['answer'], result['sources'], result['questions']
 
@@ -386,6 +402,10 @@ def _extract_questions(content):
     return questions[:3]  # Return max 3 questions
 
 
+# ----------------------------------------
+# Main Query Processing Functions
+# ----------------------------------------
+
 def user_input(user_question, usersession, isRegularQuery, hascsvxl, mode, filenames=None, language=None):
     """
     Process user queries and generate responses.
@@ -397,16 +417,19 @@ def user_input(user_question, usersession, isRegularQuery, hascsvxl, mode, filen
         hascsvxl (bool): Flag for CSV/Excel data
         mode (str): Processing mode
         filenames (list, optional): List of filenames to filter results by
+        language (str, optional): Language for response
         
     Returns:
         dict: Response with answer, filename, page number, sources, and questions
     """
     start_time = time.time()
+    logger.info(f'Processing query: "{user_question}" for session {usersession}')
 
     # Check if query is for document summarization
     try:
         is_summary = is_summary_query(user_question)
         if is_summary:
+            logger.info(f'Query identified as summary request')
             # Convert filenames to folder names if filenames are provided
             folder_names = []
             if filenames and len(filenames) > 0:
@@ -417,14 +440,14 @@ def user_input(user_question, usersession, isRegularQuery, hascsvxl, mode, filen
                     if safe_folder_name:
                         folder_names.append(safe_folder_name)
                         
-                logging.info(f"Using folder names for summary: {folder_names}")
+            logger.info(f"Using folder names for summary: {folder_names}")
                         
             # Use the modified summarize_document function
             summarized_content = summarize_document(user_question, usersession, language, folder_names)
             return {"answer": summarized_content}
     except Exception as e:
-        logging.info(f'Error generating summary: {e}')
-        logging.info(f'Could not create summary, continuing with normal flow')
+        logger.error(f'Error generating summary: {e}')
+        logger.info(f'Could not create summary, continuing with normal flow')
 
     # Get relevant context for user question
     pageNo = 0
@@ -435,25 +458,81 @@ def user_input(user_question, usersession, isRegularQuery, hascsvxl, mode, filen
         if not formatted_context:
             formatted_context = ""
     except Exception as e:
-        logging.info(f'Error getting relevant context: {e}')    
-    logging.info('---- %s seconds to do similarity and keyword search ----' % (time.time() - start_time))
+        logger.error(f'Error getting relevant context: {e}')    
+    logger.info('---- %s seconds to do similarity and keyword search ----' % (time.time() - start_time))
     
     # Add SQL results if CSV/Excel files exist
     sqldoc = None
     if hascsvxl == True:
         sqldoc, error = query_database(usersession, user_question)
         if sqldoc:
-            logging.info(f'Adding SQL document to the list: {sqldoc}')
+            logger.info(f'SQL query results added to context')
             formatted_context = sqldoc + "\n\n" + formatted_context
         else:
-            logging.info(f'No results found for SQL query')
-
-    # logging.info(f'Formatted context: {formatted_context}')
+            logger.info(f'No results found for SQL query')
 
     # Get previous question for context
     prevqn = checkPreviousQn(usersession=usersession)
     
     # Create prompt for LLM
+    prompt = create_llm_prompt(user_question, formatted_context, language)
+    
+    # Generate response from LLM
+    try:
+        llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
+        response = llm.invoke(prompt)
+        logger.info(f'Generated LLM response')
+        response_text = str(response.content)
+        
+        # Extract components from the response
+        cleaned_response, sources, questions = extract_structured_response(response_text)
+        
+        # Handle dictionary response type
+        if isinstance(cleaned_response, dict):
+            sources = cleaned_response.get("sources", [])
+            questions = cleaned_response.get("questions", [])
+            cleaned_response = cleaned_response.get("answer", "")
+        
+        # Special handling for summary queries
+        if is_summary_query(user_question):
+            cleaned_response = f"{cleaned_response}\n\nDetailed summary is being generated and will be available in a few minutes."
+            return {"answer": cleaned_response}
+
+        # Save the response for future context
+        save_query_history(usersession, user_question, response_text)
+        
+        logger.info('--- %s seconds to complete query processing ---' % (time.time() - start_time))
+        
+        return {
+            "answer": cleaned_response, 
+            "fileName": fileName, 
+            "pageNo": pageNo, 
+            "sources": sources, 
+            "questions": questions
+        }
+    except Exception as e:
+        logger.error(f'Error generating LLM response: {e}')
+        return {
+            "answer": f"I encountered an error while processing your query. Please try again or rephrase your question.",
+            "fileName": fileName,
+            "pageNo": pageNo,
+            "sources": [],
+            "questions": []
+        }
+
+
+def create_llm_prompt(user_question, context, language=None):
+    """
+    Generate a prompt for the LLM.
+    
+    Args:
+        user_question (str): User's question
+        context (str): Context for the question
+        language (str, optional): Language for response
+        
+    Returns:
+        str: Generated prompt
+    """
     prompt = f"""
         You are a JSON answer generator. Answer user question from given excerpts from documents. Follow these rules:
 
@@ -482,55 +561,42 @@ def user_input(user_question, usersession, isRegularQuery, hascsvxl, mode, filen
         - Use EXACT filename from source context.
 
         Context:
-        {formatted_context}
+        {context}
 
         User Question: {user_question}
 
         Generate ONLY the JSON response. Do not include any other text or explanations.
         """
     
-    # Add language in prompt if language is not English
+    # Add language preference if provided
     if language and language != 'English':
-        prompt = prompt +  f"Answer in user's preferred language - {language}."
+        prompt += f"\nAnswer in user's preferred language - {language}."
     
-    logging.info(f'Prompt for LLM: {prompt}')
-    # Generate response from LLM
-    llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
-    response = llm.invoke(prompt)
-    logging.info(f'Final LLM response: {response}')
-    response = str(response.content)
-    
-    # Extract components from the response
-    cleaned_response, sources, questions = extract_structured_response(response)
-    if isinstance(cleaned_response, dict):
-        sources = cleaned_response.get("sources", [])
-        questions = cleaned_response.get("questions", [])
-        cleaned_response = cleaned_response.get("answer", "")
-    
-    if (is_summary):
-        cleaned_response = f"{cleaned_response}\n\nDetailed summary is being generated and will be available in a few minutes."
-        return {"answer": cleaned_response}
+    return prompt
 
-    logging.info(f'Cleaned response: {cleaned_response}')
-    logging.info(f'Extracted sources: {sources}')
-    logging.info(f'Extracted questions: {questions}')
-    
-    # Save the response for future context
-    prevquestion_filename = f'users/{usersession}/prev_question.txt'
-    os.makedirs(os.path.dirname(prevquestion_filename), exist_ok=True)
-    with open(prevquestion_filename, 'w', encoding='utf-8') as file:
-        file.write(f"Previous question in chat history: {user_question}\nPrevious Response in chat history: {response}")
-    
-    logging.info('--- %s seconds to get response from llm ---' % (time.time() - start_time))
-    
-    return {
-        "answer": cleaned_response, 
-        "fileName": fileName, 
-        "pageNo": pageNo, 
-        "sources": sources, 
-        "questions": questions
-    }
 
+def save_query_history(usersession, question, response):
+    """
+    Save the user question and LLM response for future context.
+    
+    Args:
+        usersession (str): User's session identifier
+        question (str): User's question
+        response (str): LLM response
+    """
+    try:
+        prevquestion_filename = f'users/{usersession}/prev_question.txt'
+        os.makedirs(os.path.dirname(prevquestion_filename), exist_ok=True)
+        with open(prevquestion_filename, 'w', encoding='utf-8') as file:
+            file.write(f"Previous question in chat history: {question}\nPrevious Response in chat history: {response}")
+        logger.debug(f"Saved query history for session {usersession}")
+    except Exception as e:
+        logger.error(f'Error saving query history: {e}')
+
+
+# ----------------------------------------
+# Translation Functions (Placeholder)
+# ----------------------------------------
 
 def translate_text(content, input_language, output_language):
     """
@@ -586,6 +652,10 @@ def get_language(language_code):
     return languages.get(language_code, 'English')  
 
 
+# ----------------------------------------
+# Public API Functions
+# ----------------------------------------
+
 def get_demo_response(user_query, session_name):
     """
     Generate responses for demo mode (public transport queries).
@@ -601,10 +671,9 @@ def get_demo_response(user_query, session_name):
     if not user_query:
         return 'Please provide a valid question.'
     
-    response = ''
     try:
         # Get response from database
-        sqldoc = query_database(session_name, user_query)
+        sqldoc, _ = query_database(session_name, user_query)
 
         # Get previous question for context
         prev_question = checkPreviousQn(session_name)
@@ -629,13 +698,12 @@ def get_demo_response(user_query, session_name):
         # Generate response from LLM
         llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
         llm_response = llm.invoke(prompt)
-        logging.info(f'Final LLM response: {llm_response}')
+        logger.info(f'Generated demo response')
         response = str(llm_response.content)
+        return response
     except Exception as e:
-        logging.info(f'Error in text generation: {e}')
+        logger.error(f'Error generating demo response: {e}')
         raise
-    
-    return response
 
 
 def get_llm_response(user_query, input_language, output_language, session_name, hascsvxl, mode, filenames=None):
@@ -654,24 +722,28 @@ def get_llm_response(user_query, input_language, output_language, session_name, 
     Returns:
         dict: Response with answer and metadata
     """
-    # Translate input if needed (commented out)
-    # if input_language != 23:
-    #     user_query = translate_text(user_query, input_language, 23)
-    
+    # Get language name
     language = get_language(output_language)
-    if user_query and user_query.strip():
-        response = ''
-        try:
-            response = user_input(user_query, session_name, True, hascsvxl=hascsvxl, mode=mode, filenames=filenames, language=language)
-        except Exception as e:
-            logging.info(f'Error in text generation: {e}')
-            raise
-
-        # Translate output if needed (commented out)
-        # if output_language != 23:
-        #     response = translate_text(response, 23, output_language)
-
+    
+    # Validate query
+    if not user_query or not user_query.strip():
+        return {"answer": "Please provide a question."}
+    
+    # Process query
+    try:
+        response = user_input(
+            user_query, 
+            session_name, 
+            True, 
+            hascsvxl=hascsvxl, 
+            mode=mode, 
+            filenames=filenames, 
+            language=language
+        )
         return response
+    except Exception as e:
+        logger.error(f'Error processing query: {e}')
+        raise
 
 
 def get_general_llm_response(user_query, input_language, output_language, session_name):
@@ -687,37 +759,40 @@ def get_general_llm_response(user_query, input_language, output_language, sessio
     Returns:
         dict: Response with answer
     """
-    # Translate input if needed
+    # Get language name
     language = get_language(output_language)
     
-    if user_query and user_query.strip():
-        response = ''
-        try:
-            # Create prompt for LLM
-            prompt = f"""You are a chat bot called Iknow created by Carnot Research Pvt Ltd, which answers queries related to a document.
-            Right now, user has not provided the document and simply interacting with chat bot.
-            So, just answer the below user question in short and ask the user to upload files in the sidebar menu on left or select a knowledge container from the existing container and tell the user than either no files are uploaded or no knowledge container is selected with existing files.
-            Guide the user to upload files or select a knowledge container by telling them to select a knowledge container from the left menu or upload a file with the new container button.
+    # Validate query
+    if not user_query or not user_query.strip():
+        return {"answer": "Please provide a question."}
+    
+    try:
+        # Create prompt for LLM
+        prompt = f"""You are a chat bot called Iknow created by Carnot Research Pvt Ltd, which answers queries related to a document.
+        Right now, user has not provided the document and simply interacting with chat bot.
+        So, just answer the below user question in short and ask the user to upload files in the sidebar menu on left or select a knowledge container from the existing container and tell the user than either no files are uploaded or no knowledge container is selected with existing files.
+        Guide the user to upload files or select a knowledge container by telling them to select a knowledge container from the left menu or upload a file with the new container button.
 
-            Question:
-            ```{user_query}```
-            """
-            # Add language in prompt if language is not English
-            if language and language != 'English':
-                prompt = prompt +  f"Answer in user's preferred language - {language}."
+        Question:
+        ```{user_query}```
+        """
+        
+        # Add language in prompt if language is not English
+        if language and language != 'English':
+            prompt = prompt + f"Answer in user's preferred language - {language}."
 
-            # Generate response from LLM
-            llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
-            llm_response = llm.invoke(prompt)
-            logging.info(f'GPT response: {llm_response}')
+        # Generate response from LLM
+        llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
+        llm_response = llm.invoke(prompt)
+        logger.info(f'Generated general response for empty document state')
 
-            response = str(llm_response.content)
-        except Exception as e:
-            logging.info(f'Error in text generation: {e}')
-            raise
-
-        # Translate output if needed
+        response = str(llm_response.content)
+        
+        # Translate output if needed (currently a placeholder)
         if output_language != 23:
             response = translate_text(response, 23, output_language)
 
         return {"answer": response}
+    except Exception as e:
+        logger.error(f'Error generating general response: {e}')
+        raise

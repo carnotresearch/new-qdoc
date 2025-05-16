@@ -81,15 +81,23 @@ def ask():
             return jsonify({'message': 'Token is missing!'}), 401
         
         user_email = auth_service.authenticate(token)
-        session_id = data.get('sessionId')
-        session_name = user_email + str(session_id.lower())
+        session_name = user_email
+        context = data.get('context', False)
     except ExpiredSignatureError:
         return jsonify({'message': 'Token has expired!'}), 401
     except InvalidTokenError as e:
         return jsonify({'message': 'Token is invalid!'}), 401
     except Exception as e:
         logger.exception(f'Authentication error: {e}')
-        return jsonify({'message': 'Token decoding failed!'}), 401
+        return jsonify({'message': 'Authentication failed!'}), 401
+    
+    # We only need session_id when context is True
+    if context:
+        session_id = data.get('sessionId')
+        if not session_id:
+            return jsonify({'message': 'Session ID is required for context queries!'}), 400
+            
+        session_name = user_email + str(session_id.lower())
 
     # Process query
     response, status_code = query_service.process_authenticated_query(data, user_email, session_name)
