@@ -225,6 +225,7 @@ class DocumentSummaryService:
         # Create abstractive summary using LLM
         try:
             prompt = self._create_summary_prompt(query, combined_important_sentences, language)
+            logger.info(f"Approx token count for prompt: {len(prompt.split()) * 1.33}")
             
             # Create summary with LLM
             llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key)
@@ -284,8 +285,12 @@ class DocumentSummaryService:
                 if os.path.exists(imp_sents_path):
                     with open(imp_sents_path, "r", encoding='utf8') as file:
                         file_sentences = file.read()
-                        filename = folder_name  # Default to folder_name if metadata not available
+                        if not file_sentences:
+                            logger.warning(f"No important sentences found in {folder_name}")
+                            continue
                         
+                        # Filename from metadata or default to folder name
+                        filename = folder_name
                         if os.path.exists(metadata_path):
                             try:
                                 with open(metadata_path, 'r', encoding='utf8') as meta_file:
@@ -296,6 +301,7 @@ class DocumentSummaryService:
                         
                         # Add file identifier and its content
                         combined_text += f"\n--- {filename} ---\n{file_sentences}\n"
+                        logger.info(f"Added important sentences for {filename}")
                         found_any = True
         
         # If no files were found with the specified folder names, return empty string
@@ -341,8 +347,12 @@ class DocumentSummaryService:
                 if os.path.exists(imp_sents_path):
                     with open(imp_sents_path, "r", encoding='utf8') as file:
                         file_sentences = file.read()
-                        filename = curr_folder_name  # Default to folder_name if metadata not available
+                        if not file_sentences:
+                            logger.warning(f"No important sentences found in {curr_folder_name}")
+                            continue
                         
+                        # Filename from metadata or default to folder name
+                        filename = curr_folder_name
                         if os.path.exists(metadata_path):
                             try:
                                 with open(metadata_path, 'r', encoding='utf8') as meta_file:
@@ -353,6 +363,7 @@ class DocumentSummaryService:
                         
                         # Add file identifier and its content
                         combined_text += f"\n--- {filename} ---\n{file_sentences}\n"
+                        logger.info(f"Added important sentences for {filename}")
         
         return combined_text
     

@@ -138,6 +138,8 @@ def get_hierarchical_chunks(pages, filename=None):
                     metadata=metadata
                 ))
 
+    # Log the number of chunks created
+    logging.info(f"Created {len(final_chunks)} chunks from file: {filename}")
     return final_chunks
 
 
@@ -157,7 +159,6 @@ def process_single_file(raw_text, user_session, filename):
     clean_file_name = clean_filename(filename)
     
     # Use filename (without extension) as the folder name
-    # Remove file extension
     file_name = os.path.splitext(clean_file_name)[0]
     # Clean filename to make it safe for directory use
     safe_folder_name = secure_filename(file_name)

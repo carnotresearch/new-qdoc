@@ -1,17 +1,15 @@
 """
-Query processing service module.
+Query processing service module (updated).
 
 This module handles document querying, LLM interactions, and response generation.
+Updated to use the agent-based approach for more efficient and modular processing.
 """
 
 import logging
 import time
 from typing import Dict, Any, List, Optional, Tuple
 
-from controllers.ask import (
-    get_llm_response, get_general_llm_response, 
-    get_demo_response
-)
+from app.services.query_agent_service import get_query_agent_service
 from controllers.database import is_user_limit_over, is_trial_limit_over
 from utils.guardrails import input_guardrail_pipeline
 
@@ -25,6 +23,7 @@ class QueryService:
         """Initialize query service."""
         logger.info("Initializing query service")
         self._guardrail = input_guardrail_pipeline()
+        self.query_agent = get_query_agent_service()
     
     def process_trial_query(self, data: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         """
@@ -60,20 +59,41 @@ class QueryService:
             logger.exception(f'Invalid request format: {e}')
             return {'message': str(e)}, 400
         
-        # Generate response using LLM
+        # Apply guardrails
         try:
-            logger.info(f'User query: {user_query["message"]}')
+            guardrail_response = self._guardrail.process_input(user_query["message"])
+            if guardrail_response.get("status") == "blocked":
+                logger.warning(f"Query blocked by guardrails: {user_query['message']}")
+                return guardrail_response, 400
+            else:
+                # If the input is allowed, proceed with sanitized input
+                user_query["message"] = guardrail_response.get("sanitized_input")
+                logger.info(f'Sanitized user query: {user_query["message"]}')
+        except Exception as e:
+            logger.warning(f"Guardrail error (proceeding with original query): {e}")
+        
+        # Process query using agent
+        try:
+            logger.info(f'User trial query: {user_query["message"]}')
             session_name = fingerprint
             
-            llm_response = self._get_appropriate_response(
-                user_query, session_name
+            # Process with query agent
+            response = self.query_agent.process_query(
+                user_query["message"],
+                session_name,
+                user_query["input_language"],
+                user_query["output_language"],
+                user_query["filenames"],
+                user_query["hascsvxl"],
+                user_query["mode"],
+                is_trial=True
             )
         except Exception as e:
-            logger.exception(f'Error generating LLM response: {e}')
-            return {'message': 'Error generating response from LLM'}, 500
+            logger.exception(f'Error processing query with agent: {e}')
+            return {'message': 'Error generating response'}, 500
 
         logger.info('--- %s seconds to complete query response ---' % (time.time() - start_time))
-        return llm_response, 200
+        return response, 200
     
     def process_authenticated_query(self, data: Dict[str, Any], user_email: str, session_name: str) -> Tuple[Dict[str, Any], int]:
         """
@@ -115,17 +135,40 @@ class QueryService:
         except Exception as e:
             logger.warning(f"Guardrail error (proceeding with original query): {e}")
         
-        # Generate response using LLM
+        # Process query using agent
         try:
-            llm_response = self._get_appropriate_response(
-                user_query, session_name
-            )
+            # Check if context is available
+            has_context = user_query.get("context", False)
+            logger.info(f"Query has context: {has_context}")
+            
+            if not has_context:
+                # User hasn't selected any files/sessions, use the no-context handler
+                logger.info("Processing as a no-context query (general chat)")
+                response = self.query_agent.process_no_context_query(
+                    user_query["message"],
+                    user_email,
+                    user_query["input_language"],
+                    user_query["output_language"]
+                )
+            else:
+                # User has selected files/session, use normal processing
+                logger.info("Processing as a context query (document-specific)")
+                response = self.query_agent.process_query(
+                    user_query["message"],
+                    session_name,
+                    user_query["input_language"],
+                    user_query["output_language"],
+                    user_query["filenames"],
+                    user_query["hascsvxl"],
+                    user_query["mode"],
+                    is_trial=False
+                )
         except Exception as e:
-            logger.exception(f'Error generating LLM response: {e}')
-            return {'message': 'Error generating response from LLM'}, 500
+            logger.exception(f'Error processing query with agent: {e}')
+            return {'message': 'Error generating response'}, 500
 
         logger.info('--- %s seconds to complete query response ---' % (time.time() - start_time))
-        return llm_response, 200
+        return response, 200
     
     def process_demo_query(self, data: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
         """
@@ -152,6 +195,7 @@ class QueryService:
         
         # Generate response using LLM
         try:
+            from controllers.ask import get_demo_response
             logger.info(f'Demo query: {user_query}')
             session_name = "user20250317t114507"  # Fixed demo session
             llm_response = get_demo_response(user_query, session_name)
@@ -195,37 +239,6 @@ class QueryService:
             "mode": mode,
             "filenames": filenames
         }
-    
-    def _get_appropriate_response(self, user_query: Dict[str, Any], session_name: str) -> Dict[str, Any]:
-        """
-        Get the appropriate response based on context and query parameters.
-        
-        Args:
-            user_query: Extracted query parameters
-            session_name: User session identifier
-            
-        Returns:
-            LLM response
-        """
-        # If context is available, use document-based response
-        if user_query.get("context"):
-            return get_llm_response(
-                user_query["message"],
-                user_query["input_language"],
-                user_query["output_language"],
-                session_name,
-                user_query["hascsvxl"],
-                user_query["mode"],
-                user_query["filenames"]
-            )
-        else:
-            # If no context, use general response
-            return get_general_llm_response(
-                user_query["message"],
-                user_query["input_language"],
-                user_query["output_language"],
-                session_name
-            )
 
 # Create a singleton instance
 _query_service = None
