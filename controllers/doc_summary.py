@@ -34,6 +34,8 @@ class DocumentSummaryService:
         """Initialize the document summary service."""
         logger.info("Initializing document summary service")
         self.bert_model = Summarizer()
+        # Default character limit for fallback content
+        self.fallback_char_limit = 10000
     
     def create_abstractive_summary(self, user_session: str) -> None:
         """
@@ -210,21 +212,22 @@ class DocumentSummaryService:
             str: Abstractive summary of the document
             
         Raises:
-            Exception: If no important sentences are found or summary creation fails
+            Exception: If no text can be found for summarization
         """
         start_time = time.time()
         logger.info(f"Generating document summary for query: {query}")
         
         # Get important sentences from specified files or all files
-        combined_important_sentences = self._get_combined_important_sentences(user_session, folder_names)
+        # If imp_sents.txt doesn't exist, this will now fall back to content.txt
+        combined_text = self._get_combined_important_sentences(user_session, folder_names)
         
-        if not combined_important_sentences:
-            logger.warning("No important sentences found")
-            raise Exception("No important sentences found. Please run the summarization first.")
+        if not combined_text:
+            logger.warning("No text found for summarization")
+            raise Exception("No text found for summarization. Please check if the files exist.")
         
         # Create abstractive summary using LLM
         try:
-            prompt = self._create_summary_prompt(query, combined_important_sentences, language)
+            prompt = self._create_summary_prompt(query, combined_text, language)
             logger.info(f"Approx token count for prompt: {len(prompt.split()) * 1.33}")
             
             # Create summary with LLM
@@ -241,36 +244,38 @@ class DocumentSummaryService:
                                          folder_names: Optional[List[str]] = None) -> str:
         """
         Get combined important sentences from specified files or all files.
+        Falls back to using direct content when important sentences are not available.
         
         Args:
             user_session (str): User's session identifier
             folder_names (list, optional): List of folder names to include
             
         Returns:
-            str: Combined important sentences
+            str: Combined important sentences or document content
         """
-        combined_important_sentences = ""
+        combined_text = ""
         
         # If specific folder names are provided, use only those files' important sentences
         if folder_names and isinstance(folder_names, list) and len(folder_names) > 0:
-            combined_important_sentences = self._get_sentences_from_specified_folders(user_session, folder_names)
+            combined_text = self._get_sentences_from_specified_folders(user_session, folder_names)
         
         # If no specific folder name is provided or fallback is triggered, use all available files
-        if not combined_important_sentences:
-            combined_important_sentences = self._get_sentences_from_all_files(user_session)
+        if not combined_text:
+            combined_text = self._get_sentences_from_all_files(user_session)
         
-        return combined_important_sentences
+        return combined_text
     
     def _get_sentences_from_specified_folders(self, user_session: str, folder_names: List[str]) -> str:
         """
         Get important sentences from specified folders.
+        Falls back to content.txt if imp_sents.txt is not available.
         
         Args:
             user_session (str): User's session identifier
             folder_names (list): List of folder names to include
             
         Returns:
-            str: Combined important sentences
+            str: Combined important sentences or document content
         """
         combined_text = ""
         files_dir = os.path.join('users', user_session, 'files')
@@ -280,33 +285,43 @@ class DocumentSummaryService:
             # Process each provided folder name
             for folder_name in folder_names:
                 imp_sents_path = os.path.join('users', user_session, 'files', folder_name, 'imp_sents.txt')
+                content_path = os.path.join('users', user_session, 'files', folder_name, 'content.txt')
                 metadata_path = os.path.join('users', user_session, 'files', folder_name, 'metadata.json')
                 
+                # Get filename from metadata or default to folder name
+                filename = folder_name
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r', encoding='utf8') as meta_file:
+                            metadata = json.load(meta_file)
+                            filename = metadata.get('filename', folder_name)
+                    except Exception as e:
+                        logger.error(f"Error reading metadata for {folder_name}: {e}")
+                
+                # Try important sentences first
                 if os.path.exists(imp_sents_path):
                     with open(imp_sents_path, "r", encoding='utf8') as file:
                         file_sentences = file.read()
-                        if not file_sentences:
-                            logger.warning(f"No important sentences found in {folder_name}")
-                            continue
-                        
-                        # Filename from metadata or default to folder name
-                        filename = folder_name
-                        if os.path.exists(metadata_path):
-                            try:
-                                with open(metadata_path, 'r', encoding='utf8') as meta_file:
-                                    metadata = json.load(meta_file)
-                                    filename = metadata.get('filename', folder_name)
-                            except Exception as e:
-                                logger.error(f"Error reading metadata for {folder_name}: {e}")
-                        
-                        # Add file identifier and its content
-                        combined_text += f"\n--- {filename} ---\n{file_sentences}\n"
-                        logger.info(f"Added important sentences for {filename}")
+                        if file_sentences:
+                            combined_text += f"\n--- {filename} ---\n{file_sentences}\n"
+                            logger.info(f"Added important sentences for {filename}")
+                            found_any = True
+                        else:
+                            logger.warning(f"Empty important sentences file for {folder_name}")
+                
+                # Fall back to content.txt if imp_sents.txt doesn't exist or is empty
+                elif os.path.exists(content_path):
+                    file_content = self._get_content_from_file(content_path)
+                    if file_content:
+                        combined_text += f"\n--- {filename} (Direct Content) ---\n{file_content}\n"
+                        logger.info(f"Added direct content for {filename} (fallback)")
                         found_any = True
+                    else:
+                        logger.warning(f"Empty content file for {folder_name}")
         
         # If no files were found with the specified folder names, return empty string
         if not found_any:
-            logger.warning(f"No important sentences found for specified folder names: {folder_names}")
+            logger.warning(f"No content found for specified folder names: {folder_names}")
             return ""
             
         return combined_text
@@ -314,18 +329,27 @@ class DocumentSummaryService:
     def _get_sentences_from_all_files(self, user_session: str) -> str:
         """
         Get important sentences from all files.
+        Falls back to content.txt if imp_sents.txt is not available.
         
         Args:
             user_session (str): User's session identifier
             
         Returns:
-            str: Combined important sentences
+            str: Combined important sentences or document content
         """
-        # Check for legacy mode - session-level summary
-        legacy_path = os.path.join('users', user_session, 'imp_sents.txt')
-        if os.path.exists(legacy_path):
-            with open(legacy_path, "r", encoding='utf8') as file:
+        # Check for legacy mode
+        legacy_imp_sents_path = os.path.join('users', user_session, 'imp_sents.txt')
+        legacy_content_path = os.path.join('users', user_session, 'content.txt')
+        
+        # Check legacy mode - session-level summary
+        if os.path.exists(legacy_imp_sents_path):
+            with open(legacy_imp_sents_path, "r", encoding='utf8') as file:
                 return file.read()
+        # Fall back to legacy content if important sentences don't exist
+        elif os.path.exists(legacy_content_path):
+            file_content = self._get_content_from_file(legacy_content_path)
+            logger.info(f"Using direct content from legacy file (fallback)")
+            return file_content
         
         # New approach: Combine important sentences from all files
         combined_text = ""
@@ -335,38 +359,76 @@ class DocumentSummaryService:
             
             # If no files found, return empty string
             if not file_dirs:
-                logger.warning("No files found with summaries.")
+                logger.warning("No files found for summarization.")
                 return ""
             
             # Process each file directory
             for file_dir in file_dirs:
                 curr_folder_name = os.path.basename(file_dir)
                 imp_sents_path = os.path.join(file_dir, 'imp_sents.txt')
+                content_path = os.path.join(file_dir, 'content.txt')
                 metadata_path = os.path.join(file_dir, 'metadata.json')
                 
+                # Filename from metadata or default to folder name
+                filename = curr_folder_name
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r', encoding='utf8') as meta_file:
+                            metadata = json.load(meta_file)
+                            filename = metadata.get('filename', curr_folder_name)
+                    except Exception as e:
+                        logger.error(f"Error reading metadata for {curr_folder_name}: {e}")
+                
+                # Try important sentences first
                 if os.path.exists(imp_sents_path):
                     with open(imp_sents_path, "r", encoding='utf8') as file:
                         file_sentences = file.read()
                         if not file_sentences:
-                            logger.warning(f"No important sentences found in {curr_folder_name}")
+                            logger.warning(f"Empty important sentences file for {curr_folder_name}")
                             continue
-                        
-                        # Filename from metadata or default to folder name
-                        filename = curr_folder_name
-                        if os.path.exists(metadata_path):
-                            try:
-                                with open(metadata_path, 'r', encoding='utf8') as meta_file:
-                                    metadata = json.load(meta_file)
-                                    filename = metadata.get('filename', curr_folder_name)
-                            except Exception as e:
-                                logger.error(f"Error reading metadata for {curr_folder_name}: {e}")
-                        
+                            
                         # Add file identifier and its content
                         combined_text += f"\n--- {filename} ---\n{file_sentences}\n"
                         logger.info(f"Added important sentences for {filename}")
+                
+                # Fall back to content.txt if imp_sents.txt doesn't exist or is empty
+                elif os.path.exists(content_path):
+                    file_content = self._get_content_from_file(content_path)
+                    if not file_content:
+                        logger.warning(f"Empty content file for {curr_folder_name}")
+                        continue
+                        
+                    # Add file identifier and its content
+                    combined_text += f"\n--- {filename} (Direct Content) ---\n{file_content}\n"
+                    logger.info(f"Added direct content for {filename} (fallback)")
         
         return combined_text
     
+    def _get_content_from_file(self, content_path: str, max_chars: int = None) -> str:
+        """
+        Get a limited amount of content from a file.
+        
+        Args:
+            content_path (str): Path to the content file
+            max_chars (int, optional): Maximum number of characters to read
+            
+        Returns:
+            str: Limited content from the file
+        """
+        if max_chars is None:
+            max_chars = self.fallback_char_limit
+            
+        try:
+            with open(content_path, "r", encoding='utf8') as file:
+                content = file.read(max_chars)
+                if len(content) >= max_chars:
+                    # Add an ellipsis to indicate truncation
+                    content = content + "..."
+                return content
+        except Exception as e:
+            logger.error(f'Error reading content from {content_path}: {e}')
+            return ""
+            
     def _create_summary_prompt(self, query: str, sentences: str, language: Optional[str] = None) -> str:
         """
         Create a prompt for the LLM to generate a summary.
@@ -379,12 +441,12 @@ class DocumentSummaryService:
         Returns:
             str: Prompt for the LLM
         """
-        prompt = f'''You are given most important sentences extracted from one or more documents/files/papers.
-            Answer the question based on the given sentences. Creatively infer and summarize the information in the sentences to provide a comprehensive answer.
-            Do not make up information that is not in the sentences. Answer the question in a concise and clear manner.
-            The sentences may come from multiple files, include relevant information from each source. Do not mention about extracted sentences, only include the file name in the answer.
+        prompt = f'''You are given extracted text content from one or more documents/files/papers.
+            Answer the question based on the given content. Creatively infer and summarize the information in the text to provide a comprehensive answer.
+            Do not make up information that is not in the provided content. Answer the question in a concise and clear manner.
+            The content may come from multiple files, include relevant information from each source. Do not mention about extracted sentences or direct content, only include the file name in the answer.
             
-            ```Sentences```
+            ```Text Content```
             {sentences}
             
             ```Query```
