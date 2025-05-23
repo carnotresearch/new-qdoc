@@ -6,7 +6,7 @@ import yaml
 import re
 import os
 from ..services.db_operations import check_or_add_message_id
-from ..services.openai_service import generate_response_icarkno
+from ..services.demo_service import get_demo_response
 
 def log_http_response(response):
     logging.info(f"Status: {response.status_code}")
@@ -152,7 +152,7 @@ def process_whatsapp_message(body):
             logging.info(f"Processing message from {name} ({wa_id}): {message_body}")
 
             logging.info("Using icarKno for response - not metro related")
-            response = generate_response_icarkno(message_body, wa_id, name)
+            response = get_demo_response(message_body)
             
             # Format response for WhatsApp
             response = process_text_for_whatsapp(response)
