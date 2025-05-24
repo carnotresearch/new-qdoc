@@ -317,6 +317,7 @@ def get_text_from_files(files: List[FileStorage]) -> Tuple[List[Document], List[
                 result = await extract_content_from_file(temp_path, file.filename)
                 
                 if result["success"] and result["content"]:
+                    logger.info(f"Successfully extracted content from {file.filename}")
                     # Create Document object
                     doc = Document(
                         page_content=result["content"],
