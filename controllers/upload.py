@@ -48,6 +48,8 @@ def process_file_content(pages, user_session, folder_name, filename):
     
     # Combine all text from the file
     full_text = ""
+    total_pages = len(pages)
+    
     for page in pages:
         full_text += page.page_content
         full_text = full_text.replace("\n", " ")
@@ -60,7 +62,7 @@ def process_file_content(pages, user_session, folder_name, filename):
     # Save file metadata
     metadata = {
         'filename': clean_file_name,
-        'page_count': len(pages),
+        'page_count': total_pages,
         'extracted_at': os.path.getmtime(content_path),
         'file_size': os.path.getsize(content_path)
     }
@@ -99,6 +101,9 @@ def get_hierarchical_chunks(pages, filename=None):
     
     # Process each page
     for page in pages:
+        page_number = page.metadata.get('page', 0)
+        source = page.metadata.get('source', filename or '')
+        
         # Split by markdown headers
         md_header_splits = markdown_splitter.split_text(page.page_content)
         
@@ -119,8 +124,8 @@ def get_hierarchical_chunks(pages, filename=None):
             for chunk in smaller_chunks:
                 # Prepare metadata
                 metadata = {
-                    "source": page.metadata.get("source", ""),
-                    "page": page.metadata.get("page", ""),
+                    "source": source,
+                    "page": page_number,
                     "header": " > ".join([
                         doc.metadata.get(f"Header {i}", "") 
                         for i in range(1, 4) 
@@ -139,7 +144,7 @@ def get_hierarchical_chunks(pages, filename=None):
                 ))
 
     # Log the number of chunks created
-    logging.info(f"Created {len(final_chunks)} chunks from file: {filename}")
+    logging.info(f"Created {len(final_chunks)} chunks from {len(pages)} pages in file: {filename}")
     return final_chunks
 
 
@@ -213,6 +218,11 @@ def store_vector(raw_text_list, user_session, new_container=True, file_info_list
             file_result = process_single_file(raw_text, user_session, filename)
             file_results.append(file_result)
             
+            # Log page tracking information
+            logging.info(f"File {filename}: {file_result['page_count']} pages, "
+                        f"{file_result['chunk_count']} chunks, "
+                        f"max page number: {file_result['max_page_number']}")
+            
         except Exception as e:
             logging.error(f"Error processing file {i}: {e}")
             file_results.append({
@@ -221,5 +231,11 @@ def store_vector(raw_text_list, user_session, new_container=True, file_info_list
                 'error': str(e)
             })
     
-    logging.info(f"Processed {len(file_results)} files with {sum(1 for r in file_results if r.get('success', False))} successes")
+    total_successful = sum(1 for r in file_results if r.get('success', False))
+    total_pages = sum(r.get('page_count', 0) for r in file_results if r.get('success', False))
+    total_chunks = sum(r.get('chunk_count', 0) for r in file_results if r.get('success', False))
+    
+    logging.info(f"Processed {len(file_results)} files with {total_successful} successes, "
+                f"{total_pages} total pages, {total_chunks} total chunks")
+    
     return file_results

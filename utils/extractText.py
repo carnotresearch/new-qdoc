@@ -1,5 +1,5 @@
 """
-Simplified text extraction module for various document formats.
+Simplified text extraction module for various document formats with page tracking.
 
 This module provides unified text extraction with automatic file type detection
 and consistent output formatting across all supported file types.
@@ -104,35 +104,72 @@ def detect_file_type(file_path: str, filename: str = None) -> str:
     
     return ext_mime_map.get(ext, "text/plain")
 
-async def extract_txt(file_path: str) -> str:
-    """Extract text from plain text files"""
+async def extract_txt(file_path: str, filename: str) -> List[Document]:
+    """Extract text from plain text files - treat as single page"""
     def _read_file():
         with open(file_path, "r", encoding="utf-8") as file:
             return file.read()
     
     content = await asyncio.get_event_loop().run_in_executor(None, _read_file)
-    return clean_text(content)
+    cleaned_content = clean_text(content)
+    
+    if not cleaned_content.strip():
+        return []
+    
+    # Create a single Document for the text file
+    doc = Document(
+        page_content=cleaned_content,
+        metadata={
+            "source": filename,
+            "filename": filename,
+            "page": 0  # Text files are treated as single page (0-indexed)
+        }
+    )
+    
+    return [doc]
 
-async def extract_pdf(file_path: str) -> str:
-    """Extract text from PDF files"""
+async def extract_pdf(file_path: str, filename: str) -> List[Document]:
+    """Extract text from PDF files - one Document per page"""
     def _extract():
         doc = fitz.open(file_path)
         try:
-            text = ""
-            for page in doc:
-                text += page.get_text()
-            return text
+            pages = []
+            for page_num, page in enumerate(doc):
+                text = page.get_text()
+                if text.strip():  # Only include pages with content
+                    pages.append({
+                        "content": text,
+                        "page_number": page_num  # 0-indexed
+                    })
+            return pages
         finally:
             doc.close()
     
-    raw_text = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    return clean_text(raw_text)
+    pages_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
+    
+    documents = []
+    for page_data in pages_data:
+        cleaned_content = clean_text(page_data["content"])
+        if cleaned_content.strip():
+            doc = Document(
+                page_content=cleaned_content,
+                metadata={
+                    "source": filename,
+                    "filename": filename,
+                    "page": page_data["page_number"]
+                }
+            )
+            documents.append(doc)
+    
+    return documents
 
-async def extract_docx(file_path: str) -> str:
-    """Extract content from DOCX files"""
+async def extract_docx(file_path: str, filename: str) -> List[Document]:
+    """Extract content from DOCX files - try to detect page breaks or treat as single page"""
     def _extract():
         doc = DocxDocument(file_path)
         content = []
+        current_page_content = []
+        current_page = 0
         
         for paragraph in doc.paragraphs:
             if not paragraph.text.strip():
@@ -141,11 +178,22 @@ async def extract_docx(file_path: str) -> str:
             style = paragraph.style.name if paragraph.style else "Normal"
             text = paragraph.text.strip()
             
+            # Check for page break
+            if paragraph._element.xpath('.//w:br[@w:type="page"]'):
+                # Page break found - save current page and start new one
+                if current_page_content:
+                    content.append({
+                        "content": "\n\n".join(current_page_content),
+                        "page_number": current_page
+                    })
+                    current_page_content = []
+                    current_page += 1
+            
             # Handle headings
             if "Heading" in style:
                 level = style[-1] if style[-1].isdigit() else "1"
                 heading_marks = "#" * int(level)
-                content.append(f"\n{heading_marks} {text}\n")
+                current_page_content.append(f"\n{heading_marks} {text}\n")
             else:
                 # Handle text formatting
                 formatted_text = []
@@ -156,21 +204,51 @@ async def extract_docx(file_path: str) -> str:
                         formatted_text.append(f"*{run.text}*")
                     else:
                         formatted_text.append(run.text)
-                content.append(''.join(formatted_text))
+                current_page_content.append(''.join(formatted_text))
         
-        return "\n\n".join(content)
+        # Add the last page
+        if current_page_content:
+            content.append({
+                "content": "\n\n".join(current_page_content),
+                "page_number": current_page
+            })
+        
+        # If no page breaks were found, treat as single page
+        if not content and current_page_content:
+            content.append({
+                "content": "\n\n".join(current_page_content),
+                "page_number": 0
+            })
+        
+        return content
     
-    raw_content = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    return clean_text(raw_content)
+    pages_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
+    
+    documents = []
+    for page_data in pages_data:
+        cleaned_content = clean_text(page_data["content"])
+        if cleaned_content.strip():
+            doc = Document(
+                page_content=cleaned_content,
+                metadata={
+                    "source": filename,
+                    "filename": filename,
+                    "page": page_data["page_number"]
+                }
+            )
+            documents.append(doc)
+    
+    return documents
 
-async def extract_pptx(file_path: str) -> str:
-    """Extract content from PPTX files"""
+async def extract_pptx(file_path: str, filename: str) -> List[Document]:
+    """Extract content from PPTX files - one Document per slide"""
     def _extract():
         prs = Presentation(file_path)
-        content = []
+        slides_data = []
         
-        for slide_number, slide in enumerate(prs.slides, 1):
-            content.append(f"\n# Slide {slide_number}\n")
+        for slide_number, slide in enumerate(prs.slides):
+            content = []
+            content.append(f"\n# Slide {slide_number + 1}\n")
             
             # Extract title
             if slide.shapes.title and slide.shapes.title.text.strip():
@@ -181,20 +259,41 @@ async def extract_pptx(file_path: str) -> str:
                 if hasattr(shape, "text") and shape.text.strip():
                     if shape != slide.shapes.title:
                         content.append(shape.text.strip())
+            
+            slides_data.append({
+                "content": "\n\n".join(content),
+                "page_number": slide_number  # 0-indexed
+            })
         
-        return "\n\n".join(content)
+        return slides_data
     
-    raw_content = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    return clean_text(raw_content)
+    slides_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
+    
+    documents = []
+    for slide_data in slides_data:
+        cleaned_content = clean_text(slide_data["content"])
+        if cleaned_content.strip():
+            doc = Document(
+                page_content=cleaned_content,
+                metadata={
+                    "source": filename,
+                    "filename": filename,
+                    "page": slide_data["page_number"]
+                }
+            )
+            documents.append(doc)
+    
+    return documents
 
-async def extract_xlsx(file_path: str) -> str:
-    """Extract content from XLSX files"""
+async def extract_xlsx(file_path: str, filename: str) -> List[Document]:
+    """Extract content from XLSX files - one Document per sheet"""
     def _extract():
         wb = load_workbook(file_path, data_only=True)
-        content = []
+        sheets_data = []
         
-        for sheet_name in wb.sheetnames:
+        for sheet_index, sheet_name in enumerate(wb.sheetnames):
             ws = wb[sheet_name]
+            content = []
             content.append(f"\n# Sheet: {sheet_name}\n")
             
             max_row = min(ws.max_row or 1, 1000)
@@ -202,47 +301,66 @@ async def extract_xlsx(file_path: str) -> str:
             
             if max_row <= 1:
                 content.append("(Empty sheet)")
-                continue
-            
-            # Create table
-            headers = []
-            for col in range(1, max_col + 1):
-                cell_value = ws.cell(row=1, column=col).value
-                headers.append(str(cell_value) if cell_value is not None else "")
-            
-            content.append("| " + " | ".join(headers) + " |")
-            content.append("| " + " | ".join(["---"] * len(headers)) + " |")
-            
-            # Add data rows
-            for row in range(2, max_row + 1):
-                row_data = []
+            else:
+                # Create table
+                headers = []
                 for col in range(1, max_col + 1):
-                    cell_value = ws.cell(row=row, column=col).value
-                    row_data.append(str(cell_value) if cell_value is not None else "")
-                content.append("| " + " | ".join(row_data) + " |")
+                    cell_value = ws.cell(row=1, column=col).value
+                    headers.append(str(cell_value) if cell_value is not None else "")
+                
+                content.append("| " + " | ".join(headers) + " |")
+                content.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                
+                # Add data rows
+                for row in range(2, max_row + 1):
+                    row_data = []
+                    for col in range(1, max_col + 1):
+                        cell_value = ws.cell(row=row, column=col).value
+                        row_data.append(str(cell_value) if cell_value is not None else "")
+                    content.append("| " + " | ".join(row_data) + " |")
+            
+            sheets_data.append({
+                "content": "\n".join(content),
+                "page_number": sheet_index  # Sheet index as page number
+            })
         
-        return "\n".join(content)
+        return sheets_data
     
-    raw_content = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    return clean_text(raw_content)
+    sheets_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
+    
+    documents = []
+    for sheet_data in sheets_data:
+        cleaned_content = clean_text(sheet_data["content"])
+        if cleaned_content.strip():
+            doc = Document(
+                page_content=cleaned_content,
+                metadata={
+                    "source": filename,
+                    "filename": filename,
+                    "page": sheet_data["page_number"]
+                }
+            )
+            documents.append(doc)
+    
+    return documents
 
 async def extract_content_from_file(file_path: str, filename: str = None) -> Dict[str, Any]:
     """
-    Extract content from any supported file type
+    Extract content from any supported file type with page tracking
     
     Args:
         file_path: Path to the file
         filename: Original filename
         
     Returns:
-        Dictionary with extracted content and metadata
+        Dictionary with extracted documents and metadata
     """
     clean_name = clean_filename(filename or os.path.basename(file_path))
     
     # Validate file
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
         return {
-            "content": "",
+            "documents": [],
             "metadata": {"filename": clean_name, "error": "File not found or empty"},
             "success": False
         }
@@ -253,32 +371,35 @@ async def extract_content_from_file(file_path: str, filename: str = None) -> Dic
     try:
         # Extract based on file type
         if file_type == "text/plain":
-            content = await extract_txt(file_path)
+            documents = await extract_txt(file_path, clean_name)
         elif file_type == "application/pdf":
-            content = await extract_pdf(file_path)
+            documents = await extract_pdf(file_path, clean_name)
         elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-            content = await extract_docx(file_path)
+            documents = await extract_docx(file_path, clean_name)
         elif file_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-            content = await extract_pptx(file_path)
+            documents = await extract_pptx(file_path, clean_name)
         elif file_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-            content = await extract_xlsx(file_path)
+            documents = await extract_xlsx(file_path, clean_name)
         else:
             # Fallback to text
-            content = await extract_txt(file_path)
+            documents = await extract_txt(file_path, clean_name)
         
-        if not content.strip():
+        if not documents:
             return {
-                "content": "",
+                "documents": [],
                 "metadata": {"filename": clean_name, "error": "No content extracted"},
                 "success": False
             }
         
+        total_content_length = sum(len(doc.page_content) for doc in documents)
+        
         return {
-            "content": content,
+            "documents": documents,
             "metadata": {
                 "filename": clean_name,
                 "file_type": file_type,
-                "content_length": len(content)
+                "total_pages": len(documents),
+                "content_length": total_content_length
             },
             "success": True
         }
@@ -286,7 +407,7 @@ async def extract_content_from_file(file_path: str, filename: str = None) -> Dic
     except Exception as e:
         logger.error(f"Error extracting content from {clean_name}: {e}")
         return {
-            "content": "",
+            "documents": [],
             "metadata": {"filename": clean_name, "error": str(e)},
             "success": False
         }
@@ -316,23 +437,16 @@ def get_text_from_files(files: List[FileStorage]) -> Tuple[List[Document], List[
                 # Extract content
                 result = await extract_content_from_file(temp_path, file.filename)
                 
-                if result["success"] and result["content"]:
-                    logger.info(f"Successfully extracted content from {file.filename}")
-                    # Create Document object
-                    doc = Document(
-                        page_content=result["content"],
-                        metadata={
-                            "source": clean_filename(file.filename),
-                            "filename": clean_filename(file.filename),
-                            **result["metadata"]
-                        }
-                    )
-                    all_documents.append(doc)
+                if result["success"] and result["documents"]:
+                    logger.info(f"Successfully extracted {len(result['documents'])} pages from {file.filename}")
+                    # Add all documents from this file
+                    all_documents.extend(result["documents"])
                 
                 # File info for tracking
                 file_info = {
                     "filename": file.filename,
                     "success": result["success"],
+                    "page_count": len(result["documents"]) if result["documents"] else 0,
                     "content_length": result["metadata"].get("content_length", 0)
                 }
                 
@@ -411,20 +525,26 @@ def main():
         result = await extract_from_path(args.file)
         
         if result["success"]:
-            content = result["content"]
+            documents = result["documents"]
             print(f"Successfully extracted text from: {result['metadata']['filename']}")
-            print(f"Content length: {len(content)} characters")
+            print(f"Total pages: {len(documents)}")
+            print(f"Total content length: {result['metadata']['content_length']} characters")
             print("-" * 50)
             
             if args.output:
                 with open(args.output, 'w', encoding='utf-8') as f:
-                    f.write(content)
+                    for i, doc in enumerate(documents):
+                        f.write(f"=== Page {doc.metadata['page'] + 1} ===\n")
+                        f.write(doc.page_content)
+                        f.write(f"\n\n")
                 print(f"Content saved to: {args.output}")
             else:
-                print("Extracted content:")
-                print(content[:1000] + "..." if len(content) > 1000 else content)
+                print("Extracted content (first page preview):")
+                if documents:
+                    content = documents[0].page_content
+                    print(content[:1000] + "..." if len(content) > 1000 else content)
         else:
-            print(f"Error: {result['error']}")
+            print(f"Error: {result['metadata']['error']}")
             sys.exit(1)
     
     asyncio.run(_extract())
