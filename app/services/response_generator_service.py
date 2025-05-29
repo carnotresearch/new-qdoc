@@ -380,58 +380,6 @@ class ResponseGeneratorService:
             prompt += f"\nAnswer in user's preferred language - {language}."
         
         return prompt
-    # def _create_document_prompt(self, user_query: str, context: str, language: Optional[str] = None) -> str:
-    #     """
-    #     Generate a prompt for document queries.
-        
-    #     Args:
-    #         user_query: User's question
-    #         context: Context for the question
-    #         language: Preferred response language
-            
-    #     Returns:
-    #         Generated prompt
-    #     """
-    #     prompt = f"""
-    #     You are a JSON answer generator. Answer user question from given excerpts from documents. Follow these rules:
-
-    #     1. Return response ONLY as valid JSON with this structure:
-    #     {{
-    #     "answer": "Full answer text",
-    #     "sources": [
-    #         {{"fileName": "filename.pdf", "pageNo": number}},
-    #         ... 
-    #     ],
-    #     "relevant_questions": ["question1?", ...]
-    #     }}
-
-    #     2. Response Guidelines:
-    #     - For out-of-context questions: 
-    #     {{
-    #         "answer": "That's out of context. Please try questions like these.",
-    #         "sources": [],
-    #         "relevant_questions": ["context-related question1?", ...]
-    #     }}
-
-    #     - Infer user intent from the question and provide a relevant answer.
-    #     - Include ALL source citations used to answer the question.
-    #     - Generate follow-up questions (max 3) which can be answered based on the context.
-    #     - If there is no context available, do not generate any questions.
-    #     - Use EXACT filename from source context.
-
-    #     Context:
-    #     {context}
-
-    #     User Question: {user_query}
-
-    #     Generate ONLY the JSON response. Do not include any other text or explanations.
-    #     """
-        
-    #     # Add language preference if provided
-    #     if language and language != 'English':
-    #         prompt += f"\nAnswer in user's preferred language - {language}."
-        
-    #     return prompt
         
     def _extract_structured_response(self, response):
         """

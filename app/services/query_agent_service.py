@@ -1,11 +1,8 @@
 """
-Query agent service.
+Updated Query agent service with creative reasoning integration.
 
-This module implements the agentic approach to query processing:
-- Classifies query intent
-- Selects appropriate data sources
-- Retrieves context based on intent
-- Generates responses with the right strategy
+This module implements both standard and creative query processing modes,
+automatically selecting the appropriate approach based on user preferences.
 """
 
 import logging
@@ -18,24 +15,44 @@ from app.services.context_provider_service import get_context_provider_service
 from app.services.response_generator_service import get_response_generator_service
 from utils.extractText import clean_filename
 
+# Import creative reasoning service
+try:
+    from app.services.creative_reasoning_service import get_creative_reasoning_service
+    CREATIVE_MODE_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Creative reasoning service not available: {e}")
+    CREATIVE_MODE_AVAILABLE = False
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
 class QueryAgentService:
-    """Agentic service for processing user queries."""
+    """Enhanced agentic service for processing user queries with creative mode support."""
     
     def __init__(self):
         """Initialize the query agent service."""
-        logger.info("Initializing query agent service")
+        logger.info("Initializing enhanced query agent service")
         self.intent_service = get_query_intent_service()
         self.context_service = get_context_provider_service()
         self.response_service = get_response_generator_service()
+        
+        # Initialize creative reasoning service if available
+        if CREATIVE_MODE_AVAILABLE:
+            try:
+                self.creative_service = get_creative_reasoning_service()
+                logger.info("Creative reasoning service initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize creative reasoning service: {e}")
+                self.creative_service = None
+        else:
+            self.creative_service = None
+            logger.info("Creative reasoning service not available")
     
     def process_no_context_query(self, user_query: str, user_email: str,
                           input_language: int = 23, output_language: int = 23) -> Dict[str, Any]:
         """
-        Process a query when no document context is available (user hasn't selected files).
-        This is for authenticated users who haven't yet selected a session or uploaded files.
+        Process a query when no document context is available.
+        Note: Creative mode is not applicable for no-context queries.
         
         Args:
             user_query: The user's query text
@@ -62,7 +79,7 @@ class QueryAgentService:
                     has_csvxl: bool = False, mode: str = 'default',
                     is_trial: bool = False) -> Dict[str, Any]:
         """
-        Process a user query with an agentic approach.
+        Process a user query with support for both standard and creative modes.
         
         Args:
             user_query: The user's query text
@@ -71,14 +88,14 @@ class QueryAgentService:
             output_language: Output language code
             filenames: List of filenames to filter results by
             has_csvxl: Flag for CSV/Excel data
-            mode: Processing mode
+            mode: Processing mode ('default' or 'creative')
             is_trial: Whether this is a trial user
             
         Returns:
             Response data
         """
         start_time = time.time()
-        logger.info(f'Processing query: "{user_query}" for session {user_session}')
+        logger.info(f'Processing query: "{user_query}" for session {user_session}, mode: {mode}')
         
         # Get language name for response
         language = self._get_language(output_language)
@@ -89,6 +106,99 @@ class QueryAgentService:
         
         # Always update has_csvxl based on actual resource availability
         has_csvxl = has_csvxl or resources.get('has_data_tables', False)
+        
+        # Determine if creative mode should be used
+        if self._should_use_creative_mode(mode, user_query, resources, is_trial):
+            logger.info("Using creative reasoning mode")
+            return self._process_creative_query(
+                user_query, user_session, resources, 
+                input_language, output_language, filenames
+            )
+        
+        # Use standard processing mode
+        logger.info("Using standard processing mode")
+        return self._process_standard_query(
+            user_query, user_session, resources, language, 
+            filenames, has_csvxl
+        )
+    
+    def _should_use_creative_mode(self, mode: str, user_query: str, 
+                                resources: Dict[str, bool], is_trial: bool) -> bool:
+        """
+        Determine if creative mode should be used for this query.
+        
+        Args:
+            mode: The mode parameter from request
+            user_query: The user's query
+            resources: Available resources
+            is_trial: Whether this is a trial user
+            
+        Returns:
+            True if creative mode should be used
+        """
+        # Creative mode is explicitly requested
+        if mode != 'creative':
+            return False
+        
+        # Check if creative service is available
+        if not CREATIVE_MODE_AVAILABLE or self.creative_service is None:
+            logger.warning("Creative mode requested but service not available")
+            return False
+        
+        # Don't use creative mode for trial users (could be resource intensive)
+        if is_trial:
+            logger.info("Creative mode disabled for trial users")
+            return False
+        
+        # Need some resources available for creative mode to be useful
+        if not any(resources.values()):
+            logger.info("No resources available, skipping creative mode")
+            return False
+        
+        # Check if query is substantial enough for creative mode
+        if len(user_query.split()) < 3:
+            logger.info("Query too simple for creative mode")
+            return False
+        
+        return True
+    
+    def _process_creative_query(self, user_query: str, user_session: str,
+                              resources: Dict[str, bool],
+                              input_language: int, output_language: int,
+                              filenames: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Process query using creative reasoning mode."""
+        try:
+            response = self.creative_service.process_creative_query(
+                user_query=user_query,
+                user_session=user_session,
+                available_resources=resources,
+                input_language=input_language,
+                output_language=output_language,
+                filenames=filenames
+            )
+            
+            # Save query history for creative mode responses too
+            self.response_service.save_query_history(
+                user_session, user_query, response.get('answer', '')
+            )
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f'Error in creative mode processing: {e}')
+            
+            # Fallback to standard processing
+            logger.info("Falling back to standard processing mode")
+            language = self._get_language(output_language)
+            return self._process_standard_query(
+                user_query, user_session, resources, language, filenames, 
+                resources.get('has_data_tables', False)
+            )
+    
+    def _process_standard_query(self, user_query: str, user_session: str,
+                              resources: Dict[str, bool], language: Optional[str],
+                              filenames: Optional[List[str]], has_csvxl: bool) -> Dict[str, Any]:
+        """Process query using standard mode (existing logic)."""
         
         # Classify query intent
         intent, confidence = self.intent_service.classify_intent(
@@ -122,33 +232,13 @@ class QueryAgentService:
         return self._process_general_chat(user_query, language)
     
     def _process_general_chat(self, user_query: str, language: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Process a general chat query.
-        
-        Args:
-            user_query: User's query
-            language: Preferred response language
-            
-        Returns:
-            Response data
-        """
+        """Process a general chat query."""
         return self.response_service.generate_general_chat_response(user_query, language)
         
     def _process_summary_query(self, user_query: str, user_session: str, 
                              language: Optional[str] = None,
                              filenames: Optional[List[str]] = None) -> Dict[str, Any]:
-        """
-        Process a summary query.
-        
-        Args:
-            user_query: User's query
-            user_session: User's session identifier
-            language: Preferred response language
-            filenames: List of filenames to include in summary
-            
-        Returns:
-            Response data
-        """
+        """Process a summary query."""
         # Convert filenames to folder names if provided
         folder_names = []
         if filenames and len(filenames) > 0:
@@ -178,17 +268,7 @@ class QueryAgentService:
             
     def _process_document_query(self, user_query: str, user_session: str, 
                               language: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Process a document query.
-        
-        Args:
-            user_query: User's query
-            user_session: User's session identifier
-            language: Preferred response language
-            
-        Returns:
-            Response data
-        """
+        """Process a document query."""
         try:
             # Get document context
             context, file_name, page_no = self.context_service.get_document_context(
@@ -220,17 +300,7 @@ class QueryAgentService:
         
     def _process_data_query(self, user_query: str, user_session: str, 
                           language: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Process a data query.
-        
-        Args:
-            user_query: User's query
-            user_session: User's session identifier
-            language: Preferred response language
-            
-        Returns:
-            Response data
-        """
+        """Process a data query."""
         # Get SQL context
         sql_context = self.context_service.get_data_context(user_session, user_query)
         
@@ -258,17 +328,7 @@ class QueryAgentService:
         
     def _process_hybrid_query(self, user_query: str, user_session: str, 
                             language: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Process a hybrid query needing both document and data context.
-        
-        Args:
-            user_query: User's query
-            user_session: User's session identifier
-            language: Preferred response language
-            
-        Returns:
-            Response data
-        """
+        """Process a hybrid query needing both document and data context."""
         # Get both document and SQL contexts
         document_context, file_name, page_no = self.context_service.get_document_context(
             user_session, user_query
@@ -301,18 +361,7 @@ class QueryAgentService:
     def _process_document_aware_chat(self, user_query: str, user_session: str,
                                language: Optional[str] = None,
                                filenames: Optional[List[str]] = None) -> Dict[str, Any]:
-        """
-        Process a general chat query when documents are available.
-        
-        Args:
-            user_query: User's query
-            user_session: User's session identifier
-            language: Preferred response language
-            filenames: List of filenames (if specific files are selected)
-            
-        Returns:
-            Response data
-        """
+        """Process a general chat query when documents are available."""
         logger.info(f"Processing document-aware general chat: {user_query}")
         
         # Get basic information about the available documents
@@ -331,17 +380,8 @@ class QueryAgentService:
         return response
     
     def _get_available_sessions(self, user_email: str) -> List[str]:
-        """
-        Get a list of available sessions for a user.
-        
-        Args:
-            user_email: User's email
-            
-        Returns:
-            List of session names
-        """
+        """Get a list of available sessions for a user."""
         try:
-            # This is a placeholder - implement according to your session storage structure
             import os
             import glob
             
@@ -357,18 +397,7 @@ class QueryAgentService:
     
     def _generate_no_context_response(self, user_query: str, user_email: str,
                                    available_sessions: List[str], language: str) -> Dict[str, Any]:
-        """
-        Generate a response for a user who hasn't selected a document context.
-        
-        Args:
-            user_query: User's query
-            user_email: User's email
-            available_sessions: List of available session names
-            language: Preferred language
-            
-        Returns:
-            Response data
-        """
+        """Generate a response for a user who hasn't selected a document context."""
         prompt = f"""You are a chat bot called icarKno created by Carnot Research Pvt Ltd, which answers queries related to documents.
         
         The user is currently in the main chat interface but hasn't selected any specific documents or knowledge containers.
@@ -413,16 +442,7 @@ class QueryAgentService:
     
     def _get_documents_info(self, user_session: str, 
                           filenames: Optional[List[str]] = None) -> Dict[str, Any]:
-        """
-        Get basic information about available documents.
-        
-        Args:
-            user_session: User's session identifier
-            filenames: List of filenames (if specific files are selected)
-            
-        Returns:
-            Dictionary with document information
-        """
+        """Get basic information about available documents."""
         try:
             # Get information about available files
             file_count = 0
@@ -492,51 +512,47 @@ class QueryAgentService:
             }
             
     def _get_language(self, language_code: int) -> str:
-        """
-        Get the language name from its code.
-        
-        Args:
-            language_code: Language code
-            
-        Returns:
-            Language name
-        """
+        """Get the language name from its code."""
         languages = {
-            1: "Hindi",
-            2: "Gom",
-            3: "Kannada",
-            4: "Dogri",
-            5: "Bodo",
-            6: "Urdu",
-            7: "Tamil",
-            8: "Kashmiri",
-            9: "Assamese",
-            10: "Bengali",
-            11: "Marathi",
-            12: "Sindhi",
-            13: "Maithili",
-            14: "Punjabi",
-            15: "Malayalam",
-            16: "Manipuri",
-            17: "Telugu",
-            18: "Sanskrit",
-            19: "Nepali",
-            20: "Santali",
-            21: "Gujarati",
-            22: "Odia",
-            23: "English", 
+            1: "Hindi", 2: "Gom", 3: "Kannada", 4: "Dogri", 5: "Bodo",
+            6: "Urdu", 7: "Tamil", 8: "Kashmiri", 9: "Assamese", 10: "Bengali",
+            11: "Marathi", 12: "Sindhi", 13: "Maithili", 14: "Punjabi", 15: "Malayalam",
+            16: "Manipuri", 17: "Telugu", 18: "Sanskrit", 19: "Nepali", 20: "Santali",
+            21: "Gujarati", 22: "Odia", 23: "English"
         }
         return languages.get(language_code, 'English')
+    
+    def get_supported_modes(self) -> Dict[str, Any]:
+        """Get information about supported query processing modes."""
+        modes = {
+            "default": {
+                "name": "Standard Mode",
+                "description": "Fast, efficient query processing with intent classification",
+                "processing_time": "1-5 seconds",
+                "best_for": ["Simple questions", "Quick lookups", "Direct answers"]
+            }
+        }
+        
+        if CREATIVE_MODE_AVAILABLE and self.creative_service is not None:
+            modes["creative"] = {
+                "name": "Creative Reasoning Mode", 
+                "description": "Enhanced processing with chain-of-thought reasoning",
+                "processing_time": "10-60 seconds",
+                "best_for": ["Complex analysis", "Multi-step reasoning", "Research queries"],
+                "features": self.creative_service.get_creative_mode_info()
+            }
+        
+        return modes
 
 # Create a singleton instance
 _query_agent_service = None
 
 def get_query_agent_service() -> QueryAgentService:
     """
-    Get the query agent service singleton instance.
+    Get the enhanced query agent service singleton instance.
     
     Returns:
-        QueryAgentService: The query agent service instance
+        QueryAgentService: The enhanced query agent service instance
     """
     global _query_agent_service
     if _query_agent_service is None:
