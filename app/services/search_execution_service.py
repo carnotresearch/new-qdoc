@@ -209,6 +209,23 @@ class SearchExecutionService:
             logger.error(f"Search execution failed: {e}")
             raise
     
+    def _extract_all_sources_from_context(self, context: str) -> List[Dict[str, Any]]:
+        """Extract all source citations from context string."""
+        import re
+        sources = []
+        
+        # Pattern to match context format: (Source: filename, Page X)
+        pattern = r'\(Source:\s*([^,]+),\s*Page\s*(\d+)\)'
+        matches = re.findall(pattern, context)
+        
+        for filename, page in matches:
+            sources.append({
+                'file_name': filename.strip(),
+                'page_no': int(page)
+            })
+        
+        return sources
+
     def _execute_document_search(self, query: str, user_session: str, 
                                instruction_index: int, search_mode: str) -> SearchResult:
         """Execute document search (vector or keyword)."""
@@ -218,18 +235,25 @@ class SearchExecutionService:
             )
             
             if context:
+                # Parse context to extract all source information
+                source_info = self._extract_all_sources_from_context(context)
+                
+                # Primary source info
+                primary_source = {
+                    'file_name': file_name,
+                    'page_no': page_no
+                } if file_name else None
+                
                 return SearchResult(
                     instruction_index=instruction_index,
                     success=True,
                     content=context,
                     metadata={
                         'search_type': f'document_{search_mode}',
-                        'query': query
+                        'query': query,
+                        'all_sources': source_info  # Store all sources found
                     },
-                    source_info={
-                        'file_name': file_name,
-                        'page_no': page_no
-                    }
+                    source_info=primary_source
                 )
             else:
                 return SearchResult(
@@ -398,11 +422,68 @@ class SearchExecutionService:
         
         return total_time
     
+    def deduplicate_results(self, results: List[SearchResult]) -> List[SearchResult]:
+        """
+        Remove duplicate content from search results based on content similarity.
+        
+        Args:
+            results: List of search results that may contain duplicates
+            
+        Returns:
+            List of deduplicated search results
+        """
+        seen_content = {}
+        deduplicated = []
+        
+        for result in results:
+            if not result.success or not result.content.strip():
+                continue
+                
+            # Create a content fingerprint by normalizing the text
+            content_fingerprint = self._create_content_fingerprint(result.content)
+            
+            # Check if we've seen similar content
+            if content_fingerprint not in seen_content:
+                seen_content[content_fingerprint] = result
+                deduplicated.append(result)
+            else:
+                # If duplicate, merge metadata if needed
+                existing = seen_content[content_fingerprint]
+                logger.info(f"Found duplicate content from {result.metadata.get('search_type')}"
+                        f"(already seen in {existing.metadata.get('search_type')})")
+        
+        logger.info(f"Deduplication: {len(results)} results -> {len(deduplicated)} unique")
+        return deduplicated
+
+    def _create_content_fingerprint(self, content: str, threshold: int = 100) -> str:
+        """
+        Create a fingerprint for content to detect near-duplicates.
+        
+        Args:
+            content: The content to fingerprint
+            threshold: Number of characters to use for fingerprint
+            
+        Returns:
+            A normalized fingerprint string
+        """
+        # Normalize whitespace and case
+        normalized = ' '.join(content.lower().split())
+        
+        # Use first N characters as fingerprint (simple approach)
+        if len(normalized) <= threshold:
+            return normalized
+        
+        # Take beginning and end to catch similar chunks
+        return normalized[:threshold//2] + "..." + normalized[-threshold//2:]
+
     def filter_and_rank_results(self, results: List[SearchResult], 
-                               original_query: str) -> List[SearchResult]:
-        """Filter and rank results by relevance and success."""
+                            original_query: str) -> List[SearchResult]:
+        """Filter, deduplicate, and rank results by relevance and success."""
         # Filter successful results
         successful_results = [r for r in results if r.success and r.content.strip()]
+        
+        # Deduplicate results
+        deduplicated_results = self.deduplicate_results(successful_results)
         
         # Sort by priority and content length (as a proxy for relevance)
         def result_score(result: SearchResult) -> float:
@@ -422,8 +503,8 @@ class SearchExecutionService:
             
             return base_score * boost
         
-        successful_results.sort(key=result_score, reverse=True)
-        return successful_results
+        deduplicated_results.sort(key=result_score, reverse=True)
+        return deduplicated_results
 
 # Create a singleton instance
 _search_execution_service = None

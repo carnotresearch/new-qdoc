@@ -73,7 +73,11 @@ def process_file_content(pages, user_session, folder_name, filename):
     
     # Create chunks from the pages
     all_chunks = get_hierarchical_chunks(pages, clean_file_name)
-    
+    chunks_path = os.path.join(file_dir, 'chunks_content.txt')
+    with open(chunks_path, "w", encoding='utf-8') as file:
+        for i, chunk in enumerate(all_chunks, 1):
+            file.write(f"--- Chunk {i} ---\n")
+            file.write(chunk.page_content.strip() + "\n\n")
     return all_chunks
 
 

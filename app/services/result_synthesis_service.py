@@ -38,7 +38,7 @@ class ResultSynthesisService:
         """Initialize the result synthesis service."""
         logger.info("Initializing result synthesis service")
         self.openai_api_key = Config.OPENAI_API_KEY
-        self.llm = ChatOpenAI(model="gpt-4o", api_key=self.openai_api_key, temperature=0.2)
+        self.llm = ChatOpenAI(model="gpt-4o", api_key=self.openai_api_key, temperature=0.4, max_tokens=8000)
         self.max_sources_in_response = 10
     
     def synthesize_results(self, search_results: List[SearchResult],
@@ -70,34 +70,51 @@ class ResultSynthesisService:
             successful_results, original_query, strategy, language
         )
         
-        try:
-            # Generate synthesis
-            logger.info(f"Sending synthesis prompt to LLM (approx {len(synthesis_prompt)} characters)")
-            response = self.llm.invoke(synthesis_prompt)
-            logger.info(f"LLM Synthesis Response: {response.content}")
-            
-            synthesis_response = self._parse_synthesis_response(response.content)
-            logger.info(f"Parsed synthesis response keys: {list(synthesis_response.keys())}")
-            
-            # Create final result
-            return SynthesisResult(
-                answer=synthesis_response.get('answer', ''),
-                reasoning_steps=synthesis_response.get('reasoning_steps', []),
-                sources_used=self._extract_sources_used(successful_results),
-                confidence_level=synthesis_response.get('confidence_level', 'medium'),
-                follow_up_questions=synthesis_response.get('follow_up_questions', []),
-                synthesis_metadata={
-                    'total_sources': len(successful_results),
-                    'strategy_used': strategy.reasoning,
-                    'synthesis_approach': strategy.synthesis_approach
-                },
-                source_reliability=synthesis_response.get('source_reliability', 'moderate'),
-                answer_completeness=synthesis_response.get('answer_completeness', 'partially answered')
-            )
-            
-        except Exception as e:
-            logger.error(f"Error during synthesis: {e}")
-            return self._create_fallback_synthesis(successful_results, original_query, language)
+        # Try synthesis with retry logic
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                # Generate synthesis
+                logger.info(f"Synthesis attempt {attempt + 1}, prompt length: {len(synthesis_prompt)} characters")
+                response = self.llm.invoke(synthesis_prompt)
+                
+                # Log raw response for debugging
+                logger.debug(f"Raw LLM response (first 1000 chars): {response.content[:1000]}")
+                
+                synthesis_response = self._parse_synthesis_response(response.content)
+                
+                # Validate the response has actual content
+                if not synthesis_response.get('answer') or synthesis_response['answer'] == self._get_default_value('answer'):
+                    raise ValueError("Empty or default answer received")
+                
+                logger.info(f"Successfully parsed synthesis response on attempt {attempt + 1}")
+                
+                # Create final result
+                return SynthesisResult(
+                    answer=synthesis_response.get('answer', ''),
+                    reasoning_steps=synthesis_response.get('reasoning_steps', []),
+                    sources_used=self._extract_sources_used(successful_results),
+                    confidence_level=synthesis_response.get('confidence_level', 'medium'),
+                    follow_up_questions=synthesis_response.get('follow_up_questions', []),
+                    synthesis_metadata={
+                        'total_sources': len(successful_results),
+                        'strategy_used': strategy.reasoning,
+                        'synthesis_approach': strategy.synthesis_approach,
+                        'synthesis_attempts': attempt + 1
+                    },
+                    source_reliability=synthesis_response.get('source_reliability', 'moderate'),
+                    answer_completeness=synthesis_response.get('answer_completeness', 'fully answered')
+                )
+                
+            except Exception as e:
+                logger.error(f"Error during synthesis attempt {attempt + 1}: {e}")
+                if attempt == max_retries:
+                    logger.error("All synthesis attempts failed, using fallback")
+                    return self._create_fallback_synthesis(successful_results, original_query, language)
+                else:
+                    # Add a small delay before retry
+                    import time
+                    time.sleep(1)
     
     def _create_synthesis_prompt(self, results: List[SearchResult],
                                original_query: str,
@@ -105,8 +122,8 @@ class ResultSynthesisService:
                                language: Optional[str] = None) -> str:
         """Create a comprehensive prompt for result synthesis."""
         
-        # Prepare search results for the prompt
-        results_text = self._format_results_for_prompt(results)
+        # Prepare search results with citation mapping
+        results_text, citation_map = self._format_results_with_citations(results)
         
         # Create the main synthesis prompt
         prompt = f"""You are an expert research analyst tasked with synthesizing multiple search results into a comprehensive, accurate answer.
@@ -116,88 +133,121 @@ ORIGINAL QUERY: {original_query}
 RESEARCH STRATEGY USED:
 {strategy.reasoning}
 
-SYNTHESIS APPROACH:
-{strategy.synthesis_approach}
-
-SEARCH RESULTS:
+SEARCH RESULTS WITH CITATIONS:
 {results_text}
 
+CITATION MAPPING:
+{json.dumps(citation_map, indent=2)}
+
 YOUR TASK:
-Analyze all the search results and create a comprehensive answer that:
+Create a comprehensive answer following these steps:
 
-1. **REASONING CHAIN**: Show your step-by-step reasoning process
-2. **COMPREHENSIVE ANSWER**: Synthesize information from multiple sources
-3. **SOURCE INTEGRATION**: Seamlessly integrate information while citing sources
-4. **CONFIDENCE ASSESSMENT**: Evaluate the reliability of your answer
-5. **FOLLOW-UP QUESTIONS**: Suggest relevant follow-up questions
+1. **REASONING STEPS**: List 3-5 clear steps showing your analysis process
+2. **COMPREHENSIVE ANSWER**: 
+    - Carefully analyze the context to extract relevant data, policies, requirements, or specifications.
+    - Provide a complete and detailed answer that addresses the user’s question.
+    - Organize your response using headings, bullets, or numbering for clarity.
+    - Avoid speculation or adding content not grounded in the provided context.
+    - If information is missing, clearly state that it is not found in the current context.
+   - Use proper citations in format [filename.ext, Page X]
+   - Choose the most effective format to explain the answer:
+     * Use bullet points or numbered lists for multiple items, steps, or requirements
+     * Use paragraphs for explanations, context, or narrative information
+     * Use a combination when needed for clarity
+   - Be thorough and include all relevant information from sources
+3. **FOLLOW-UP QUESTIONS**: Generate maximum 3 relevant follow-up questions only which can be answered based on the provided information
 
-RESPONSE FORMAT:
-Provide your response as a JSON object with this exact structure:
-
+RESPONSE FORMAT - IMPORTANT:
+Generate a valid JSON object with EXACTLY this structure (no duplicates!):
 {{
     "reasoning_steps": [
-        "Step 1: Analysis of available information...",
-        "Step 2: Cross-referencing sources...",
-        "Step 3: Identifying patterns and insights...",
-        "Step 4: Synthesis and conclusion..."
+        "Step 1: <your first reasoning step>",
+        "Step 2: <your second reasoning step if needed>",
+        "Step 3: <your third reasoning step if needed>",
+        "Step 4: <your fourth reasoning step if needed>"
     ],
-    "answer": "Your comprehensive answer with inline source citations [Source X]",
+    "answer": "<your comprehensive answer with [filename.ext, Page X] citations>",
     "confidence_level": "high|medium|low",
     "follow_up_questions": [
-        "Relevant follow-up question 1?",
-        "Relevant follow-up question 2?",
-        "Relevant follow-up question 3?"
+        "Question 1?",
+        "Question 2?",
+        "Question 3?"
     ],
-    "source_reliability": "Assessment of how reliable the sources are"
+    "source_reliability": "<brief assessment of source reliability>"
 }}
 
-CITATION RULES:
-- Use [Source X] format where X is the source number from the search results
-- Cite specific sources for specific claims
-- Don't cite sources for general knowledge or logical inferences
-- If information conflicts between sources, acknowledge the conflict
+ANSWER FORMATTING GUIDELINES:
+- Use appropriate formatting
+- Ensure logical flow and readability
+- For definitions or key points: Use bullet points
 
-QUALITY REQUIREMENTS:
-- Be thorough but concise
-- Acknowledge limitations or gaps in the data
-- If sources conflict, explain the discrepancy
-- Maintain logical flow in your reasoning
-- Ensure answer directly addresses the original query"""
+CRITICAL INSTRUCTIONS:
+1. Generate ONLY ONE JSON object - no duplicates or repetitions
+2. Ensure the JSON is properly formatted and valid
+3. Include ALL relevant details from the sources - do not summarize or truncate
+4. Use the most effective format (bullets, paragraphs, or mixed) based on the content
+5. Every factual claim must have a citation
+"""
 
         # Add language specification if provided
         if language and language != 'English':
             prompt += f"\n\nLANGUAGE: Provide your answer in {language}."
         
-        prompt += "\n\nGenerate ONLY the JSON response. Do not include any other text."
-        
+        prompt += "\n\nGenerate ONLY the JSON response. Start with { and end with }."
+
         return prompt
     
-    def _format_results_for_prompt(self, results: List[SearchResult]) -> str:
-        """Format search results for inclusion in the prompt."""
+    def _format_results_with_citations(self, results: List[SearchResult]) -> Tuple[str, Dict[str, str]]:
+        """
+        Format search results with proper citation information.
+        
+        Returns:
+            Tuple of (formatted_results_text, citation_mapping)
+        """
         formatted_results = []
+        citation_map = {}
         
         for i, result in enumerate(results, 1):
             search_type = result.metadata.get('search_type', 'unknown')
             
             # Create source header
-            source_header = f"[Source {i}] ({search_type.upper()})"
+            source_key = f"Source {i}"
+            source_header = f"[{source_key}] ({search_type.upper()})"
             
-            # Add source info if available
+            # Build citation string
+            citation_parts = []
             if result.source_info:
                 if result.source_info.get('file_name'):
-                    source_header += f" - {result.source_info['file_name']}"
-                if result.source_info.get('page_no'):
-                    source_header += f", Page {result.source_info['page_no']}"
+                    file_name = result.source_info['file_name']
+                    page_no = result.source_info.get('page_no', 0)
+                    citation = f"[{file_name}, Page {page_no}]"
+                    citation_parts.append(f"{file_name}, Page {page_no}")
+                    citation_map[source_key] = citation
+                    source_header += f" - {file_name}, Page {page_no}"
+            
+            # If no source info, try to extract from content
+            if source_key not in citation_map:
+                # Look for citation patterns in the content itself
+                import re
+                citation_pattern = r'\(Source:\s*([^,]+),\s*Page\s*(\d+)\)'
+                matches = re.findall(citation_pattern, result.content)
+                if matches:
+                    file_name, page_no = matches[0]
+                    citation = f"[{file_name}, Page {page_no}]"
+                    citation_map[source_key] = citation
+                    source_header += f" - {file_name}, Page {page_no}"
+                else:
+                    citation_map[source_key] = "[Unknown Source]"
             
             # Format content (truncate if too long)
             content = result.content
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
+            # if len(content) > 40000:
+            #     content = content[:40000] + "... [truncated]"
             
             formatted_results.append(f"{source_header}:\n{content}\n")
         
-        return "\n".join(formatted_results)
-    
+        return "\n".join(formatted_results), citation_map
+
     def _parse_synthesis_response(self, response_content: str) -> Dict[str, Any]:
         """Parse the JSON response from the synthesis LLM."""
         try:
@@ -205,12 +255,57 @@ QUALITY REQUIREMENTS:
             cleaned_response = response_content.strip()
             
             # Remove any markdown code block markers
-            if cleaned_response.startswith('```json'):
-                cleaned_response = cleaned_response[7:]
-            if cleaned_response.startswith('```'):
-                cleaned_response = cleaned_response[3:]
-            if cleaned_response.endswith('```'):
-                cleaned_response = cleaned_response[:-3]
+            if '```json' in cleaned_response:
+                start = cleaned_response.find('```json') + 7
+                end = cleaned_response.rfind('```')
+                if end > start:
+                    cleaned_response = cleaned_response[start:end].strip()
+            elif '```' in cleaned_response:
+                cleaned_response = cleaned_response.replace('```', '').strip()
+            
+            # Find the first { and last } to extract just the JSON
+            first_brace = cleaned_response.find('{')
+            last_brace = cleaned_response.rfind('}')
+            if first_brace >= 0 and last_brace > first_brace:
+                cleaned_response = cleaned_response[first_brace:last_brace + 1]
+            
+            # Attempt to fix common JSON errors
+            # Remove any duplicate keys by parsing line by line
+            lines = cleaned_response.split('\n')
+            seen_keys = set()
+            filtered_lines = []
+            brace_count = 0
+            skip_until_brace = False
+            
+            for line in lines:
+                # Count braces to track nesting
+                brace_count += line.count('{') - line.count('}')
+                
+                # Check if this line contains a key we've already seen
+                if '"reasoning_steps"' in line and 'reasoning_steps' in seen_keys:
+                    skip_until_brace = True
+                    continue
+                elif '"answer"' in line and 'answer' in seen_keys:
+                    skip_until_brace = True
+                    continue
+                elif '"follow_up_questions"' in line and 'follow_up_questions' in seen_keys:
+                    skip_until_brace = True
+                    continue
+                    
+                # Skip lines until we close the duplicate section
+                if skip_until_brace:
+                    if ']' in line or ('}' in line and brace_count == 1):
+                        skip_until_brace = False
+                    continue
+                
+                # Track which keys we've seen
+                for key in ['reasoning_steps', 'answer', 'confidence_level', 'follow_up_questions', 'source_reliability']:
+                    if f'"{key}"' in line:
+                        seen_keys.add(key)
+                
+                filtered_lines.append(line)
+            
+            cleaned_response = '\n'.join(filtered_lines)
             
             # Parse JSON
             parsed = json.loads(cleaned_response)
@@ -221,16 +316,15 @@ QUALITY REQUIREMENTS:
                 if field not in parsed:
                     parsed[field] = self._get_default_value(field)
             
-            # Handle optional new fields
-            if 'source_reliability' not in parsed:
-                parsed['source_reliability'] = 'moderate'
-            if 'answer_completeness' not in parsed:
-                parsed['answer_completeness'] = 'partially answered'
+            # Ensure follow_up_questions is a list and has max 3 items
+            if isinstance(parsed.get('follow_up_questions'), list):
+                parsed['follow_up_questions'] = parsed['follow_up_questions'][:3]
             
             return parsed
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse synthesis response as JSON: {e}")
+            logger.error(f"Response content: {response_content[:500]}...")
             return self._extract_fallback_content(response_content)
     
     def _get_default_value(self, field: str) -> Any:
@@ -356,7 +450,7 @@ QUALITY REQUIREMENTS:
                                     page_no: Optional[int] = None) -> Dict[str, Any]:
         """
         Convert synthesis result to the legacy response format for compatibility.
-        
+                
         Args:
             synthesis_result: The synthesis result
             file_name: Primary file name for compatibility
@@ -365,14 +459,32 @@ QUALITY REQUIREMENTS:
         Returns:
             Response in legacy format
         """
-        # Extract source information for legacy format
+        # Extract citations from the answer text
+        import re
+        citation_pattern = r'\[([^,\]]+\.(?:pdf|docx|txt|doc|pptx|csv|xlsx|xls)),\s*Page\s*(\d+)\]'
+        citations_in_answer = re.findall(citation_pattern, synthesis_result.answer)
+        
+        # Build legacy sources from citations found in answer
         legacy_sources = []
-        for source in synthesis_result.sources_used:
-            if source.get('file_name') and source.get('page_no') is not None:
+        seen_citations = set()
+        
+        for cite_file, cite_page in citations_in_answer:
+            citation_key = f"{cite_file}_{cite_page}"
+            if citation_key not in seen_citations:
+                seen_citations.add(citation_key)
                 legacy_sources.append({
-                    "fileName": source['file_name'],
-                    "pageNo": source['page_no']
+                    "fileName": cite_file,
+                    "pageNo": int(cite_page)
                 })
+        
+        # If no citations found in answer, fall back to source info
+        if not legacy_sources:
+            for source in synthesis_result.sources_used:
+                if source.get('file_name') and source.get('page_no') is not None:
+                    legacy_sources.append({
+                        "fileName": source['file_name'],
+                        "pageNo": source['page_no']
+                    })
         
         return {
             "answer": synthesis_result.answer,

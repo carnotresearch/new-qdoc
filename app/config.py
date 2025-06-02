@@ -43,13 +43,19 @@ class BaseConfig:
     RATELIMIT_DEFAULT = "300 per day, 30 per hour"
     RATELIMIT_STRATEGY = "fixed-window"
     RATELIMIT_STORAGE_URL = "memory://"
+
+
+    # Neo4j Settings
+    NEO4J_URI = os.getenv("NEO4J_URI")
+    NEO4J_USERNAME = os.getenv("NEO4J_USERNAME")
+    NEO4J_PASSWORD =  os.getenv("NEO4J_PASSWORD")
     
     @staticmethod
     def validate():
         """Validate that all required settings are present."""
         required_vars = [
             "ES_CLOUD_ID", "ES_API_KEY", "OPENAI_API_KEY", 
-            "MONGO_URL", "MYSQL_HOST", "MYSQL_USERNAME", "MYSQL_PASSWORD"
+            "MONGO_URL", "MYSQL_HOST", "MYSQL_USERNAME", "MYSQL_PASSWORD","NEO4J_URI","NEO4J_USERNAME","NEO4J_PASSWORD",
         ]
         
         missing = [var for var in required_vars if not os.getenv(var)]
@@ -88,7 +94,7 @@ class ProductionConfig(BaseConfig):
         raise ValueError("SECRET_KEY environment variable is required in production")
     
     # More strict rate limiting for production
-    RATELIMIT_DEFAULT = "200 per day, 20 per hour"
+    RATELIMIT_DEFAULT = "200 per day, 200 per hour"
 
 class ConfigFactory:
     """Factory class to create configuration objects."""

@@ -36,7 +36,7 @@ def register_extensions(app):
     """
     # Initialize rate limiter with custom key function
     limiter = Limiter(
-        get_real_ip,  # Use custom function for getting the real IP
+        key_func=get_real_ip,  # Use custom function for getting the real IP
         app=app,
         storage_uri=app.config.get("RATELIMIT_STORAGE_URL"),
         default_limits=[app.config.get("RATELIMIT_DEFAULT")],
