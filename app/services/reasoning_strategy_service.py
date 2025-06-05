@@ -127,7 +127,6 @@ CONTEXT INFORMATION:
 SEARCH TYPES AVAILABLE:
 - DOCUMENT_VECTOR: Semantic search through uploaded documents (best for finding conceptual information, explanations, and contextual content)
 - DOCUMENT_KEYWORD: Keyword-based search through documents (best for finding specific terms, names, or exact phrases)
-- SQL_QUERY: Query structured data tables (best for numerical data, statistics, calculations, and data analysis)
 - HYBRID: Combination of document and data searches (best when answer requires both textual context and data insights)
 - SUMMARY: Search through document summaries (best for getting overview or when full documents are too detailed)
 
@@ -151,14 +150,14 @@ EXAMPLES OF GOOD DECOMPOSITION:
 
 Example 1 - Complex Query: "How does our Q3 revenue compare to industry benchmarks and what factors contributed to any differences?"
 Sub-questions:
-1. "What was our Q3 revenue?" (SQL_QUERY - get company data)
+1. "Quarter Q3 revenue" (DOCUMENT_KEYWORD - get company data)
 2. "What are the industry Q3 revenue benchmarks?" (DOCUMENT_VECTOR - find industry reports)
 3. "What factors affected our Q3 performance?" (HYBRID - combine financial data with business context)
 
 Example 2 - Multi-faceted Query: "Explain the relationship between climate change and renewable energy adoption trends"
 Sub-questions:
-1. "What are the main climate change impacts?" (DOCUMENT_VECTOR - get climate science info)
-2. "What are the current renewable energy adoption trends?" (SQL_QUERY if data available, else DOCUMENT_VECTOR)
+1. "Climate change impacts" (DOCUMENT_KEYWORD - get climate science info)
+2. "What are the current renewable energy adoption trends?" (DOCUMENT_VECTOR - find recent reports)
 3. "How do climate policies influence renewable energy adoption?" (DOCUMENT_VECTOR - policy documents)
 
 USER QUESTION: {user_query}

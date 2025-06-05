@@ -506,6 +506,17 @@ class SearchExecutionService:
         deduplicated_results.sort(key=result_score, reverse=True)
         return deduplicated_results
 
+    def execute_single_search_with_context(self, instruction: SearchInstruction,
+                                        instruction_index: int,
+                                        user_session: str,
+                                        original_query: str,
+                                        context_accumulator: Dict[str, Any]) -> SearchResult:
+        """Execute a single search instruction (public method for streaming)."""
+        return self._execute_single_search(
+            instruction, instruction_index, user_session, 
+            original_query, context_accumulator
+        )
+
 # Create a singleton instance
 _search_execution_service = None
 

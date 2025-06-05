@@ -499,6 +499,118 @@ CRITICAL INSTRUCTIONS:
             }
         }
 
+    def synthesize_results_stream(self, search_results: List[SearchResult],
+                              original_query: str,
+                                strategy: SearchStrategy,
+                                language: Optional[str] = None):
+        """
+        Synthesize results with streaming support.
+
+        Yields chunks of the answer as they're generated.
+        """
+        logger.info(f"Synthesizing {len(search_results)} search results with streaming")
+
+        # Filter successful results
+        successful_results = [r for r in search_results if r.success and r.content.strip()]
+
+        if not successful_results:
+            yield {
+                'type': 'answer_chunk',
+                'content': "I couldn't find any relevant information to answer your question.",
+                'is_first': True
+            }
+            yield {
+                'type': 'sources',
+                'content': []
+            }
+            return
+
+        # Create synthesis prompt
+        synthesis_prompt = self._create_synthesis_prompt(
+            successful_results, original_query, strategy, language
+        )
+
+        try:
+            from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+
+            # This will yield from inside a closure
+            def get_callback(yield_func):
+                class StreamingCallback(StreamingStdOutCallbackHandler):
+                    def __init__(self):
+                        self.buffer = ""
+                        self.is_first = True
+
+                    def on_llm_new_token(self, token: str, **kwargs) -> None:
+                        self.buffer += token
+                        if token in '.!?\n' and len(self.buffer) > 50:
+                            yield_func({
+                                'type': 'answer_chunk',
+                                'content': self.buffer,
+                                'is_first': self.is_first
+                            })
+                            self.is_first = False
+                            self.buffer = ""
+
+                    def on_llm_end(self, response, **kwargs) -> None:
+                        if self.buffer:
+                            yield_func({
+                                'type': 'answer_chunk',
+                                'content': self.buffer,
+                                'is_first': self.is_first
+                            })
+
+                return StreamingCallback()
+
+            # Create callback instance that calls this generator’s yield
+            def stream_yield(data):
+                nonlocal yielded  # prevent re-yielding same chunks
+                yield_queue.append(data)
+
+            yield_queue = []
+            yielded = False
+            callback = get_callback(stream_yield)
+
+            # Initialize streaming LLM
+            streaming_llm = ChatOpenAI(
+                model="gpt-4o",
+                api_key=self.openai_api_key,
+                temperature=0.1,
+                streaming=True,
+                callbacks=[callback]
+            )
+
+            # Run inference
+            _ = streaming_llm.invoke(synthesis_prompt)
+
+            # Yield the captured chunks from the queue
+            for item in yield_queue:
+                yield item
+
+            # Extract and send sources
+            sources = self._extract_sources_used(successful_results)
+            yield {
+                'type': 'sources',
+                'content': sources
+            }
+
+            # Send follow-up questions
+            yield {
+                'type': 'questions',
+                'content': [
+                    "What specific aspects would you like me to elaborate on?",
+                    "Do you need more details about any particular finding?",
+                    "Would you like me to search for additional information?"
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"Streaming synthesis error: {e}")
+            yield {
+                'type': 'error',
+                'content': f"Error during synthesis: {str(e)}"
+            }
+
+
 # Create a singleton instance
 _result_synthesis_service = None
 

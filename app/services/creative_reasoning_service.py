@@ -32,6 +32,116 @@ class CreativeReasoningService:
         self.max_processing_time = 60  # seconds
         self.enable_reasoning_steps_in_response = True
     
+    def process_creative_query_stream(self, user_query: str, user_session: str,
+                                    input_language: int = 23, output_language: int = 23,
+                                    filenames: Optional[list] = None, has_csvxl: bool = False):
+        """
+        Process a query using creative reasoning mode with streaming.
+        
+        Yields events for each step of the process.
+        """
+        start_time = time.time()
+        logger.info(f"Processing creative query with streaming: {user_query}")
+        
+        try:
+            # Check available resources
+            available_resources = self.context_service.check_resources_exist(user_session)
+            available_resources['has_data_tables'] = has_csvxl or available_resources.get('has_data_tables', False)
+            
+            # Step 1: Strategy Creation
+            yield {
+                'type': 'strategy_start',
+                'content': 'Analyzing your question and creating a search strategy...'
+            }
+            
+            strategy = self._create_reasoning_strategy(user_query, available_resources, filenames)
+            
+            yield {
+                'type': 'strategy_complete',
+                'content': {
+                    'reasoning': strategy.reasoning,
+                    'query_breakdown': strategy.query_breakdown,
+                    'search_count': len(strategy.searches)
+                }
+            }
+            
+            # Step 2: Search Execution
+            search_instructions = self.strategy_service.convert_to_search_instructions(strategy)
+            
+            if not search_instructions:
+                yield {
+                    'type': 'error',
+                    'content': 'Unable to create search strategy'
+                }
+                return
+            
+            all_search_results = []
+            
+            for i, instruction in enumerate(search_instructions):
+                yield {
+                    'type': 'search_start',
+                    'content': {
+                        'index': i + 1,
+                        'total': len(search_instructions),
+                        'query': instruction.query,
+                        'search_type': instruction.search_type.name,
+                        'instructions': instruction.instructions
+                    }
+                }
+                
+                # Execute single search
+                search_results = self.execution_service.execute_single_search_with_context(
+                    instruction, i, user_session, user_query, {}
+                )
+                all_search_results.append(search_results)
+                
+                yield {
+                    'type': 'search_complete',
+                    'content': {
+                        'index': i + 1,
+                        'success': search_results.success,
+                        'preview': search_results.content[:200] if search_results.success else None
+                    }
+                }
+            
+            # Step 3: Result Synthesis
+            yield {
+                'type': 'synthesis_start',
+                'content': 'Analyzing all search results and creating comprehensive answer...'
+            }
+            
+            # Filter and rank results
+            filtered_results = self.execution_service.filter_and_rank_results(
+                all_search_results, user_query
+            )
+            
+            # Get language name
+            language_name = self._get_language_name(output_language)
+            
+            # Synthesize with streaming
+            for event in self.synthesis_service.synthesize_results_stream(
+                filtered_results, user_query, strategy, language_name
+            ):
+                yield event
+            
+            # Final metadata
+            processing_time = time.time() - start_time
+            yield {
+                'type': 'complete',
+                'content': {
+                    'processing_time': processing_time,
+                    'total_searches': len(search_instructions),
+                    'successful_searches': len(filtered_results)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in streaming creative query: {e}")
+            yield {
+                'type': 'error',
+                'content': str(e)
+            }
+
     def process_creative_query(self, user_query: str,
                              user_session: str,
                              available_resources: Dict[str, bool],
