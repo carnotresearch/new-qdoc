@@ -238,8 +238,10 @@ def async_process_graph(file_names, user_session, session_id, output_dir, is_den
             
             if os.path.exists(content_path):
                 if is_dense:
+                    # content_path = os.path.join("users", user_session, "files", file_name, "chunks_content.txt")
                     process_text_file_dense(content_path, session_id, file_name)
                 else:
+                    content_path = os.path.join("users", user_session, "files", file_name, "imp_sents.txt")
                     process_text_file(content_path, session_id, file_name)
         
         graph_data = fetch_neo4j_graph_data(

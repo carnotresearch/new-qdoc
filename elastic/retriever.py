@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from .client import ElasticClient
 from .index_manager import ElasticIndexManager
 import logging
+import unicodedata
 from config import Config
 
 class ElasticRetriever:
@@ -24,7 +25,7 @@ class ElasticRetriever:
             if not self.index_manager.index_exists(self.index_name):
                 return None
 
-            # Keyword retriever
+            # Keyword retriever with Unicode support
             key_retriever = ElasticsearchRetriever(
                 es_client=self.client,
                 index_name=self.index_name,
@@ -51,14 +52,18 @@ class ElasticRetriever:
     
     def query_enrichment(self, query):
         try:
+            # Normalize query for better Unicode handling
+            normalized_query = unicodedata.normalize("NFC", query)
+            
             rewrite_prompt = f"""Rewrite this query for better document retrieval:
                 1. Fix spelling/grammar
                 2. Expand acronyms
                 3. Add implicit context
                 4. Include synonyms
                 5. Maintain original intent
+                6. If query is in Hindi, preserve the Hindi script
                 
-                Original: {query}
+                Original: {normalized_query}
 
                 Do not include any other text or explanations.
                 """
@@ -75,16 +80,29 @@ class ElasticRetriever:
             return None
 
     def _create_filtered_query(self, query):
-        # Query enrichment
-        enriched_query = self.query_enrichment(query)
+        """Create search query with better Unicode support"""
+        # Normalize the query
+        normalized_query = unicodedata.normalize("NFC", query)
         
-        should_clauses = [{"match": {"text": query}}]
-        if enriched_query:
-            should_clauses.append({"match": {"text": enriched_query}})
+        # Query enrichment
+        enriched_query = self.query_enrichment(normalized_query)
+        
+        should_clauses = [
+            {"match": {"text": normalized_query}},
+            {"match": {"text.hindi": normalized_query}}  # Use Hindi analyzer field
+        ]
+        
+        if enriched_query and enriched_query != normalized_query:
+            should_clauses.extend([
+                {"match": {"text": enriched_query}},
+                {"match": {"text.hindi": enriched_query}}
+            ])
+        
         return {
             "query": {
                 "bool": {
-                    "should": should_clauses
+                    "should": should_clauses,
+                    "minimum_should_match": 1
                 }
             },
             "_source": ["text", "metadata.source", "metadata.page", "metadata.filename"]

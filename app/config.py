@@ -25,6 +25,7 @@ class BaseConfig:
     
     # OpenAI
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     
     # MongoDB
     MONGO_URL = os.getenv("MONGO_URL")
@@ -54,7 +55,7 @@ class BaseConfig:
     def validate():
         """Validate that all required settings are present."""
         required_vars = [
-            "ES_CLOUD_ID", "ES_API_KEY", "OPENAI_API_KEY", 
+            "ES_CLOUD_ID", "ES_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
             "MONGO_URL", "MYSQL_HOST", "MYSQL_USERNAME", "MYSQL_PASSWORD","NEO4J_URI","NEO4J_USERNAME","NEO4J_PASSWORD",
         ]
         
@@ -130,3 +131,7 @@ class ConfigFactory:
             config_class.validate()
             
         return config_class
+    
+
+
+    

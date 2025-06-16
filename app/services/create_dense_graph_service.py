@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from pydantic import BaseModel
 from langchain_core.documents import Document
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, PromptTemplate
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_experimental.graph_transformers.llm import UnstructuredRelation
@@ -44,13 +45,25 @@ def initialize_globals():
         password=Config.NEO4J_PASSWORD,       
     )
     
-    openai_api_key = Config.OPENAI_API_KEY
+    # openai_api_key = Config.OPENAI_API_KEY
 
     
-    llm = ChatOpenAI(
+    # llm = ChatOpenAI(
+    #     temperature=0.2,
+    #     max_tokens=1024,
+    #     openai_api_key=openai_api_key,
+    #     stop=None
+    # )
+
+
+    gemini_api_key = Config.GEMINI_API_KEY
+
+    
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash",
         temperature=0.2,
         max_tokens=1024,
-        openai_api_key=openai_api_key,
+        google_api_key=gemini_api_key,
         stop=None
     )
     

@@ -20,3 +20,4 @@ class Config:
     NEO4J_URI = _config.NEO4J_URI
     NEO4J_USERNAME = _config.NEO4J_USERNAME
     NEO4J_PASSWORD = _config.NEO4J_PASSWORD
+    GEMINI_API_KEY = _config.GEMINI_API_KEY

@@ -128,15 +128,52 @@ async def extract_txt(file_path: str, filename: str) -> List[Document]:
     
     return [doc]
 
+# async def extract_pdf(file_path: str, filename: str) -> List[Document]:
+#     """Extract text from PDF files - one Document per page"""
+#     def _extract():
+#         doc = fitz.open(file_path)
+#         try:
+#             pages = []
+#             for page_num, page in enumerate(doc):
+#                 text = page.get_text()
+#                 if text.strip():  # Only include pages with content
+#                     pages.append({
+#                         "content": text,
+#                         "page_number": page_num  # 0-indexed
+#                     })
+#             return pages
+#         finally:
+#             doc.close()
+    
+#     pages_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
+    
+#     documents = []
+#     for page_data in pages_data:
+#         cleaned_content = clean_text(page_data["content"])
+#         if cleaned_content.strip():
+#             doc = Document(
+#                 page_content=cleaned_content,
+#                 metadata={
+#                     "source": filename,
+#                     "filename": filename,
+#                     "page": page_data["page_number"]
+#                 }
+#             )
+#             documents.append(doc)
+    
+#     return documents
+
 async def extract_pdf(file_path: str, filename: str) -> List[Document]:
-    """Extract text from PDF files - one Document per page"""
+    """Extract text from PDF files with enhanced Unicode/Hindi support"""
     def _extract():
         doc = fitz.open(file_path)
         try:
             pages = []
             for page_num, page in enumerate(doc):
-                text = page.get_text()
-                if text.strip():  # Only include pages with content
+                # Try multiple extraction methods for better Unicode handling
+                text = _extract_text_with_fallback(page)
+                
+                if text and text.strip():  # Only include pages with content
                     pages.append({
                         "content": text,
                         "page_number": page_num  # 0-indexed
@@ -149,7 +186,7 @@ async def extract_pdf(file_path: str, filename: str) -> List[Document]:
     
     documents = []
     for page_data in pages_data:
-        cleaned_content = clean_text(page_data["content"])
+        cleaned_content = clean_text_unicode(page_data["content"])
         if cleaned_content.strip():
             doc = Document(
                 page_content=cleaned_content,
@@ -162,6 +199,223 @@ async def extract_pdf(file_path: str, filename: str) -> List[Document]:
             documents.append(doc)
     
     return documents
+
+def _extract_text_with_fallback(page):
+    """
+    Extract text using multiple methods with fallback for better Unicode support
+    """
+    try:
+        # Method 1: Default text extraction
+        text = page.get_text()
+        if _is_readable_text(text):
+            logger.debug("Using default text extraction")
+            return text
+        
+        # Method 2: Extract with layout preservation
+        text = page.get_text("text", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
+        if _is_readable_text(text):
+            logger.debug("Using layout-preserved text extraction")
+            return text
+            
+        # Method 3: Extract with different encoding handling
+        text = page.get_text("rawdict")
+        if text:
+            extracted_text = _extract_from_rawdict(text)
+            if _is_readable_text(extracted_text):
+                logger.debug("Using rawdict text extraction")
+                return extracted_text
+        
+        # Method 4: Try HTML extraction and clean it
+        html_text = page.get_text("html")
+        if html_text:
+            import re
+            # Remove HTML tags and extract text
+            clean_html = re.sub(r'<[^>]+>', '', html_text)
+            if _is_readable_text(clean_html):
+                logger.debug("Using HTML text extraction")
+                return clean_html
+        
+        # Method 5: Extract using text blocks with position info
+        blocks = page.get_text("dict")
+        if blocks:
+            extracted_text = _extract_from_blocks(blocks)
+            if _is_readable_text(extracted_text):
+                logger.debug("Using blocks text extraction")
+                return extracted_text
+        
+        # If all methods fail, return the original text anyway
+        logger.warning(f"All extraction methods failed for page, using default")
+        return page.get_text()
+        
+    except Exception as e:
+        logger.error(f"Error in text extraction: {e}")
+        # Fallback to basic extraction
+        return page.get_text()
+
+def _is_readable_text(text):
+    """
+    Check if extracted text appears to be readable (not gibberish)
+    """
+    if not text or len(text.strip()) < 10:
+        return False
+    
+    # Check for reasonable ratio of alphanumeric/unicode characters
+    total_chars = len(text)
+    readable_chars = sum(1 for c in text if c.isalnum() or c.isspace() or unicodedata.category(c).startswith('L'))
+    
+    # Should have at least 60% readable characters
+    readable_ratio = readable_chars / total_chars if total_chars > 0 else 0
+    
+    # Also check for excessive punctuation which might indicate encoding issues
+    punct_chars = sum(1 for c in text if unicodedata.category(c).startswith('P'))
+    punct_ratio = punct_chars / total_chars if total_chars > 0 else 0
+    
+    return readable_ratio > 0.6 and punct_ratio < 0.3
+
+def _extract_from_rawdict(rawdict_data):
+    """Extract text from PyMuPDF rawdict format"""
+    try:
+        extracted_text = []
+        if 'blocks' in rawdict_data:
+            for block in rawdict_data['blocks']:
+                if 'lines' in block:
+                    for line in block['lines']:
+                        if 'spans' in line:
+                            line_text = []
+                            for span in line['spans']:
+                                if 'text' in span:
+                                    # Try to fix encoding issues
+                                    span_text = _fix_encoding(span['text'])
+                                    line_text.append(span_text)
+                            if line_text:
+                                extracted_text.append(' '.join(line_text))
+        return '\n'.join(extracted_text)
+    except Exception as e:
+        logger.error(f"Error extracting from rawdict: {e}")
+        return ""
+
+def _extract_from_blocks(blocks_data):
+    """Extract text from PyMuPDF blocks format"""
+    try:
+        extracted_text = []
+        if 'blocks' in blocks_data:
+            for block in blocks_data['blocks']:
+                if block.get('type') == 0:  # Text block
+                    if 'lines' in block:
+                        for line in block['lines']:
+                            if 'spans' in line:
+                                line_text = []
+                                for span in line['spans']:
+                                    if 'text' in span:
+                                        span_text = _fix_encoding(span['text'])
+                                        line_text.append(span_text)
+                                if line_text:
+                                    extracted_text.append(' '.join(line_text))
+        return '\n'.join(extracted_text)
+    except Exception as e:
+        logger.error(f"Error extracting from blocks: {e}")
+        return ""
+
+def _fix_encoding(text):
+    """
+    Attempt to fix common encoding issues in extracted text
+    """
+    if not text:
+        return text
+    
+    try:
+        # First, ensure it's properly decoded as UTF-8
+        if isinstance(text, bytes):
+            text = text.decode('utf-8', errors='ignore')
+        
+        # Try to fix common Hindi encoding issues
+        # Some PDFs use incorrect encodings for Devanagari script
+        
+        # Method 1: Try to re-encode and decode with different encodings
+        encodings_to_try = ['utf-8', 'utf-16', 'iso-8859-1', 'cp1252', 'latin1']
+        
+        for encoding in encodings_to_try:
+            try:
+                if isinstance(text, str):
+                    # Convert to bytes then back to string with different encoding
+                    test_bytes = text.encode('latin1', errors='ignore')
+                    decoded_text = test_bytes.decode(encoding, errors='ignore')
+                    
+                    # Check if this produces better results for Hindi
+                    if _contains_proper_devanagari(decoded_text):
+                        return decoded_text
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                continue
+        
+        # Method 2: Fix specific character mappings common in Hindi PDFs
+        char_fixes = {
+            'ﬁ': 'फि',
+            'ﬂ': 'फ्ल',
+            '¼': '्र',
+            '½': '्य',
+            '¾': '्व',
+            'ò': 'ो',
+            'è': 'े',
+            'ì': 'ि',
+            'î': 'ी',
+            'ù': 'ु',
+            'û': 'ू',
+            '`': 'ं',
+            '~': 'ँ',
+        }
+        
+        fixed_text = text
+        for wrong, correct in char_fixes.items():
+            fixed_text = fixed_text.replace(wrong, correct)
+        
+        return fixed_text
+        
+    except Exception as e:
+        logger.error(f"Error fixing encoding: {e}")
+        return text
+
+def _contains_proper_devanagari(text):
+    """Check if text contains proper Devanagari characters"""
+    if not text:
+        return False
+    
+    # Count Devanagari characters (Unicode range 0x0900-0x097F)
+    devanagari_count = sum(1 for c in text if '\u0900' <= c <= '\u097F')
+    total_chars = len([c for c in text if not c.isspace()])
+    
+    # If more than 10% of non-space characters are Devanagari, consider it proper
+    return devanagari_count > 0 and (devanagari_count / max(total_chars, 1)) > 0.1
+
+def clean_text_unicode(text: str) -> str:
+    """Enhanced text cleaning with better Unicode support"""
+    if not text:
+        return text
+    
+    # First apply the original cleaning
+    text = clean_text(text)
+    
+    # Additional Unicode normalization for Hindi/Devanagari
+    try:
+        # Normalize Unicode to handle different representations of the same character
+        text = unicodedata.normalize("NFC", text)
+        
+        # Remove any remaining problematic control characters but preserve Devanagari
+        cleaned_chars = []
+        for char in text:
+            cat = unicodedata.category(char)
+            # Keep letters, numbers, spaces, punctuation, and marks (for diacritics)
+            if (cat.startswith(('L', 'N', 'Z', 'P', 'M')) or 
+                char in '\n\t ' or 
+                '\u0900' <= char <= '\u097F'):  # Devanagari range
+                cleaned_chars.append(char)
+        
+        text = ''.join(cleaned_chars)
+        
+        return text.strip()
+        
+    except Exception as e:
+        logger.error(f"Error in Unicode cleaning: {e}")
+        return text
 
 async def extract_docx(file_path: str, filename: str) -> List[Document]:
     """Extract content from DOCX files - try to detect page breaks or treat as single page"""

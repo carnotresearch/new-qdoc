@@ -4,6 +4,7 @@ from langchain_openai.embeddings import OpenAIEmbeddings
 from .index_manager import ElasticIndexManager
 from .client import ElasticClient
 import logging
+import unicodedata
 from config import Config
 
 class ElasticDocumentManager:
@@ -18,12 +19,15 @@ class ElasticDocumentManager:
 
     def store_documents(self, documents):
         try:
+            # Pre-process documents for better Unicode handling
+            processed_documents = self._preprocess_documents(documents)
+            
             # Create index if not exists
             self.index_manager.create_index(self.index_name)
             
             # Store documents with embeddings
             vector_store = ElasticsearchStore.from_documents(
-                documents,
+                processed_documents,
                 es_cloud_id=Config.ES_CLOUD_ID,
                 index_name=self.index_name,
                 es_api_key=Config.ES_API_KEY,
@@ -33,11 +37,41 @@ class ElasticDocumentManager:
             
             # Refresh index for immediate visibility
             self.index_manager.refresh_index(self.index_name)
-            logging.info(f"Stored {len(documents)} documents in {self.index_name}")
+            logging.info(f"Stored {len(processed_documents)} documents in {self.index_name}")
             return vector_store
         except Exception as e:
             logging.error(f"Error storing documents: {e}")
             raise
+
+    def _preprocess_documents(self, documents):
+        """Preprocess documents for better Unicode/Hindi handling"""
+        processed = []
+        
+        for doc in documents:
+            try:
+                # Ensure proper Unicode normalization
+                content = doc.page_content
+                if content:
+                    # Normalize Unicode
+                    content = unicodedata.normalize("NFC", content)
+                    
+                    # Ensure UTF-8 encoding
+                    if isinstance(content, bytes):
+                        content = content.decode('utf-8', errors='ignore')
+                    
+                    # Create new document with processed content
+                    processed_doc = Document(
+                        page_content=content,
+                        metadata=doc.metadata
+                    )
+                    processed.append(processed_doc)
+                    
+            except Exception as e:
+                logging.error(f"Error preprocessing document: {e}")
+                # Include original document if preprocessing fails
+                processed.append(doc)
+        
+        return processed
 
     def update_documents(self, documents):
         # Implementation for document updates
