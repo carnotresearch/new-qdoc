@@ -6,14 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from pydantic import BaseModel
 from langchain_core.documents import Document
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, PromptTemplate
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_experimental.graph_transformers.llm import UnstructuredRelation
 from langchain_core.messages import SystemMessage
 from langchain_community.graphs import Neo4jGraph
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
-from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
 from sentence_transformers import SentenceTransformer, util
 import torch
@@ -21,8 +19,9 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import logging
 from config import Config
-logger = logging.getLogger(__name__)
+from app.services.llm_service import get_standard_llm
 
+logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Global variables
@@ -38,34 +37,14 @@ def initialize_globals():
     """Initialize global variables"""
     global graph, llm, embedding_model
 
-    
     graph = Neo4jGraph(
         url=Config.NEO4J_URI,  
         username=Config.NEO4J_USERNAME,              
         password=Config.NEO4J_PASSWORD,       
     )
     
-    # openai_api_key = Config.OPENAI_API_KEY
-
-    
-    # llm = ChatOpenAI(
-    #     temperature=0.2,
-    #     max_tokens=1024,
-    #     openai_api_key=openai_api_key,
-    #     stop=None
-    # )
-
-
-    gemini_api_key = Config.GEMINI_API_KEY
-
-    
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
-        temperature=0.2,
-        max_tokens=1024,
-        google_api_key=gemini_api_key,
-        stop=None
-    )
+    # Use centralized LLM service for knowledge graph generation
+    llm = get_standard_llm()
     
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 

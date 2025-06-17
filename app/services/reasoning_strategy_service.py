@@ -9,11 +9,10 @@ import logging
 from enum import Enum, auto
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
-from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers.pydantic import PydanticOutputParser
 from pydantic import BaseModel, Field
 
-from config import Config
+from app.services.llm_service import get_comprehensive_llm
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -64,8 +63,8 @@ class ReasoningStrategyService:
     def __init__(self):
         """Initialize the reasoning strategy service."""
         logger.info("Initializing reasoning strategy service")
-        self.openai_api_key = Config.OPENAI_API_KEY
-        self.llm = ChatOpenAI(model="gpt-4o", api_key=self.openai_api_key, temperature=0.1)
+        # Use comprehensive LLM for complex strategy creation
+        self.llm = get_comprehensive_llm()
         self.parser = PydanticOutputParser(pydantic_object=SearchStrategy)
     
     def analyze_query_and_create_strategy(self, user_query: str, 

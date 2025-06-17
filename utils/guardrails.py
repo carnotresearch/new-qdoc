@@ -10,15 +10,10 @@ import os
 import logging
 from typing import List, Union, Pattern, Dict, Any, Optional, Callable
 
-from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
+from app.services.llm_service import get_fast_llm
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # ----------------------------------------
 # Base Guardrail Classes
@@ -160,7 +155,8 @@ class LLMClassifier:
             validation_prompt: Prompt template for validation
         """
         self.validation_prompt = validation_prompt
-        self.llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
+        # Use fast LLM for quick guardrails validation
+        self.llm = get_fast_llm()
         logger.debug("LLMClassifier initialized")
 
     def _call_llm(self, prompt: str) -> str:

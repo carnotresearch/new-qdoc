@@ -2,12 +2,12 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_elasticsearch.retrievers import ElasticsearchRetriever
 from langchain_elasticsearch import ElasticsearchStore
 from langchain_openai.embeddings import OpenAIEmbeddings
-from langchain_openai import ChatOpenAI
 from .client import ElasticClient
 from .index_manager import ElasticIndexManager
 import logging
 import unicodedata
 from config import Config
+from app.services.llm_service import get_fast_llm
 
 class ElasticRetriever:
     def __init__(self, index_name):
@@ -19,6 +19,8 @@ class ElasticRetriever:
             model='text-embedding-3-large',
             api_key=self.openai_api_key,
         )
+        # Use fast LLM for query enrichment
+        self.llm = get_fast_llm()
 
     def create_ensemble_retriever(self, weights=(0.4, 0.6)):
         try:
@@ -68,8 +70,7 @@ class ElasticRetriever:
                 Do not include any other text or explanations.
                 """
             
-            llm = ChatOpenAI(model="gpt-4o", api_key=self.openai_api_key)
-            response = llm.invoke(rewrite_prompt).content
+            response = self.llm.invoke(rewrite_prompt).content
             logging.info(f"Query enrichment response: {response}")
             if not response:
                 logging.warning("Query enrichment returned empty response.")

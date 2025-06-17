@@ -12,8 +12,7 @@ import logging
 from enum import Enum, auto
 from typing import Dict, Any, Tuple, Optional, List
 
-from langchain_openai import ChatOpenAI
-from config import Config
+from app.services.llm_service import get_fast_llm
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -32,8 +31,8 @@ class QueryIntentService:
     def __init__(self):
         """Initialize the query intent service."""
         logger.info("Initializing query intent service")
-        self.openai_api_key = Config.OPENAI_API_KEY
-        self.llm = ChatOpenAI(model="gpt-4o-mini", api_key=self.openai_api_key)
+        # Use fast LLM for quick intent classification
+        self.llm = get_fast_llm()
         
     def classify_intent(self, query: str, has_documents: bool = True, 
                       has_data_tables: bool = False) -> Tuple[QueryIntent, float]:

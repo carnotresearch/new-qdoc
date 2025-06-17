@@ -11,10 +11,9 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 
-from langchain_openai import ChatOpenAI
 from app.services.search_execution_service import SearchResult
 from app.services.reasoning_strategy_service import SearchStrategy
-from config import Config
+from app.services.llm_service import get_comprehensive_llm, get_streaming_llm, LLMType
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -37,8 +36,8 @@ class ResultSynthesisService:
     def __init__(self):
         """Initialize the result synthesis service."""
         logger.info("Initializing result synthesis service")
-        self.openai_api_key = Config.OPENAI_API_KEY
-        self.llm = ChatOpenAI(model="gpt-4o", api_key=self.openai_api_key, temperature=0.4, max_tokens=8000)
+        # Use comprehensive LLM for complex synthesis tasks
+        self.llm = get_comprehensive_llm()
         self.max_sources_in_response = 10
     
     def synthesize_results(self, search_results: List[SearchResult],
@@ -145,7 +144,7 @@ Create a comprehensive answer following these steps:
 1. **REASONING STEPS**: List 3-5 clear steps showing your analysis process
 2. **COMPREHENSIVE ANSWER**: 
     - Carefully analyze the context to extract relevant data, policies, requirements, or specifications.
-    - Provide a complete and detailed answer that addresses the user’s question.
+    - Provide a complete and detailed answer that addresses the user's question.
     - Organize your response using headings, bullets, or numbering for clarity.
     - Avoid speculation or adding content not grounded in the provided context.
     - If information is missing, clearly state that it is not found in the current context.
@@ -561,7 +560,7 @@ CRITICAL INSTRUCTIONS:
 
                 return StreamingCallback()
 
-            # Create callback instance that calls this generator’s yield
+            # Create callback instance that calls this generator's yield
             def stream_yield(data):
                 nonlocal yielded  # prevent re-yielding same chunks
                 yield_queue.append(data)
@@ -570,14 +569,8 @@ CRITICAL INSTRUCTIONS:
             yielded = False
             callback = get_callback(stream_yield)
 
-            # Initialize streaming LLM
-            streaming_llm = ChatOpenAI(
-                model="gpt-4o",
-                api_key=self.openai_api_key,
-                temperature=0.1,
-                streaming=True,
-                callbacks=[callback]
-            )
+            # Get streaming LLM
+            streaming_llm = get_streaming_llm(LLMType.COMPREHENSIVE)
 
             # Run inference
             _ = streaming_llm.invoke(synthesis_prompt)

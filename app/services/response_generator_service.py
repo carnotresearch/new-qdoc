@@ -16,8 +16,7 @@ import re
 import time
 from typing import Dict, Any, List, Optional, Tuple
 
-from langchain_openai import ChatOpenAI
-from config import Config
+from app.services.llm_service import get_standard_llm, get_fast_llm
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -28,8 +27,10 @@ class ResponseGeneratorService:
     def __init__(self):
         """Initialize the response generator service."""
         logger.info("Initializing response generator service")
-        self.openai_api_key = Config.OPENAI_API_KEY
-        self.llm = ChatOpenAI(model="gpt-4o", api_key=self.openai_api_key)
+        # Use standard LLM for most response generation tasks
+        self.llm = get_standard_llm()
+        # Use fast LLM for simple responses
+        self.fast_llm = get_fast_llm()
         
     def generate_general_chat_response(self, user_query: str, language: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -56,10 +57,10 @@ class ResponseGeneratorService:
         if language and language != 'English':
             prompt = prompt + f"\nAnswer in user's preferred language - {language}."
 
-        # Generate response from LLM
+        # Generate response from LLM - use fast LLM for simple responses
         try:
             logger.info(f'Generating general chat response with approx token count: {len(prompt.split()) * 1.33}')
-            llm_response = self.llm.invoke(prompt)
+            llm_response = self.fast_llm.invoke(prompt)
             logger.info(f'Generated general chat response')
             response = str(llm_response.content)
             
@@ -599,9 +600,9 @@ class ResponseGeneratorService:
         if language and language != 'English':
             prompt = prompt + f"\nAnswer in user's preferred language - {language}."
 
-        # Generate response from LLM
+        # Generate response from LLM - use fast LLM for simple responses
         try:
-            llm_response = self.llm.invoke(prompt)
+            llm_response = self.fast_llm.invoke(prompt)
             logger.info(f'Generated document-aware chat response')
             response = str(llm_response.content)
             

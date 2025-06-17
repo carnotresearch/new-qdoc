@@ -11,19 +11,12 @@ This module provides functions for:
 import logging
 import os
 
-# Third-party imports
-from langchain_openai import ChatOpenAI
-
 # Local imports
 from controllers.sql_db import query_database
-from config import Config
+from app.services.llm_service import get_standard_llm
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-# Load configuration
-openai_api_key = Config.OPENAI_API_KEY
-
 
 def checkPreviousQn(usersession):
     """
@@ -88,8 +81,8 @@ def get_demo_response(user_query, session_name):
         ```{user_query}```
         """
         
-        # Generate response from LLM
-        llm = ChatOpenAI(model="gpt-4o", api_key=openai_api_key)
+        # Generate response from centralized LLM service
+        llm = get_standard_llm()
         llm_response = llm.invoke(prompt)
         logger.info(f'Generated demo response')
         response = str(llm_response.content)

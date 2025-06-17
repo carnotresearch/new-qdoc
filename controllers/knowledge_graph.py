@@ -12,19 +12,18 @@ from langchain_experimental.graph_transformers.llm import UnstructuredRelation
 from langchain_core.messages import SystemMessage
 from langchain_community.graphs import Neo4jGraph
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
-from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
 from sentence_transformers import SentenceTransformer, util
 import torch
 from dotenv import load_dotenv
 from collections import defaultdict
+from app.services.llm_service import get_standard_llm
 
 load_dotenv()
 
 class Element(BaseModel):
     type: str
     text: Any
-
 
 graph = None
 llm = None
@@ -40,13 +39,8 @@ def initialize_globals():
     
     graph = Neo4jGraph()
     
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    llm = ChatOpenAI(
-        temperature=0.2,
-        max_tokens=1024,
-        openai_api_key=openai_api_key,
-        stop=None
-    )
+    # Use centralized LLM service for knowledge graph generation
+    llm = get_standard_llm()
     
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -313,4 +307,3 @@ def process_text_file(input_file: str, session_id: str, meta: Optional[Dict] = N
         os.remove(cache_file)
     
     return text_summaries
-

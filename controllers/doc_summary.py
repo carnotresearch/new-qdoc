@@ -17,15 +17,13 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 # Third-party imports
-from langchain_openai import ChatOpenAI
 from summarizer import Summarizer
-from config import Config
+
+# Local imports
+from app.services.llm_service import get_fast_llm
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-# Load config keys
-openai_api_key = Config.OPENAI_API_KEY
 
 class DocumentSummaryService:
     """Service for document summarization and management."""
@@ -34,6 +32,8 @@ class DocumentSummaryService:
         """Initialize the document summary service."""
         logger.info("Initializing document summary service")
         self.bert_model = Summarizer()
+        # Use fast LLM for summary generation
+        self.llm = get_fast_llm()
         # Default character limit for fallback content
         self.fallback_char_limit = 10000
     
@@ -230,9 +230,8 @@ class DocumentSummaryService:
             prompt = self._create_summary_prompt(query, combined_text, language)
             logger.info(f"Approx token count for prompt: {len(prompt.split()) * 1.33}")
             
-            # Create summary with LLM
-            llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key)
-            summary = llm.invoke(prompt)
+            # Create summary with centralized LLM service
+            summary = self.llm.invoke(prompt)
             logger.info(f'Generated summary in {time.time() - start_time:.2f} seconds')
             
             return summary.content

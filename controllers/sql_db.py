@@ -18,12 +18,12 @@ from typing import List, Optional, Tuple
 import pandas as pd
 from langchain.chains.sql_database.query import create_sql_query_chain
 from langchain_community.utilities import SQLDatabase
-from langchain_openai import ChatOpenAI
 from sqlalchemy import create_engine, exc, text
 from sqlalchemy.engine.base import Engine
 
-# Load environment variables
+# Local imports
 from config import Config
+from app.services.llm_service import get_standard_llm
 
 # Configure logging
 logging.basicConfig(
@@ -33,7 +33,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-OPENAI_API_KEY = Config.OPENAI_API_KEY
 MYSQL_CONFIG = {
     "drivername": "mysql+mysqlconnector",
     "username": Config.MYSQL_USERNAME,
@@ -125,7 +124,6 @@ def process_file(file, engine: Engine) -> List[str]:
         logger.error(f"File processing failed: {str(e)}")
         raise
 
-
 def create_database_with_tables(user_session: str, files: List) -> Tuple[bool, str]:
     """Create new database and process initial files."""
     try:
@@ -167,7 +165,6 @@ def create_database_with_tables(user_session: str, files: List) -> Tuple[bool, s
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return False, "Unexpected error occurred"
-
 
 def add_tables_to_existing_db(user_session: str, files: List) -> Tuple[bool, str]:
     """Add new tables to existing database."""
@@ -215,7 +212,6 @@ def add_tables_to_existing_db(user_session: str, files: List) -> Tuple[bool, str
         logger.error(f"Unexpected error: {str(e)}")
         return False, "Unexpected error occurred"
 
-
 def execute_safe_query(engine: Engine, query: str) -> List[dict]:
     """Safe query execution with error recovery."""
     try:
@@ -235,7 +231,6 @@ def execute_safe_query(engine: Engine, query: str) -> List[dict]:
                 return [dict(row) for row in result.mappings()]
         except:
             raise ValueError(f"Could not recover from SQL error: {str(e)}")
-
 
 def clean_sql_query(raw_query: str) -> str:
     """Precision SQL cleaning with semicolon normalization."""
@@ -278,7 +273,8 @@ def generate_sql_query(engine: Engine, natural_language_query: str) -> str:
     """Fail-safe generation pipeline with parse validation."""
     try:
         db = SQLDatabase(engine)
-        llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_API_KEY)
+        # Use centralized LLM service for SQL query generation
+        llm = get_standard_llm()
         
         # Force clean output with system prompt
         sys_prompt = """You are a SQL expert. Return ONLY ONE PERFECT SQL QUERY between ```sql delimiters. 
@@ -303,7 +299,6 @@ def generate_sql_query(engine: Engine, natural_language_query: str) -> str:
         logger.error(f"Query generation pipeline failed: {str(e)}")
         raise
 
-
 def query_database(user_session: str, natural_language_query: str) -> Tuple[Optional[List[dict]], Optional[str]]:
     """Full query pipeline with error handling."""
     try:
@@ -320,7 +315,6 @@ def query_database(user_session: str, natural_language_query: str) -> Tuple[Opti
     except Exception as e:
         logger.error(f"Query pipeline failed: {str(e)}")
         return None, str(e)
-
 
 def store_table_info(user_session: str, file_name: str):
     """
