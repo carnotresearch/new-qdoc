@@ -43,7 +43,11 @@ class LLMConfig:
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
     streaming: bool = False
-    **kwargs: Any
+    additional_params: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.additional_params is None:
+            self.additional_params = {}
 
 class BaseLLMFactory(ABC):
     """Abstract base class for LLM factories."""
@@ -73,7 +77,7 @@ class OpenAILLMFactory(BaseLLMFactory):
             timeout=config.timeout,
             streaming=config.streaming,
             api_key=self.api_key,
-            **{k: v for k, v in config.kwargs.items() if k not in ['model', 'temperature', 'max_tokens', 'timeout', 'streaming']}
+            **config.additional_params
         )
     
     def get_default_configs(self) -> Dict[LLMType, LLMConfig]:
@@ -124,7 +128,7 @@ class GoogleLLMFactory(BaseLLMFactory):
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             google_api_key=self.api_key,
-            **{k: v for k, v in config.kwargs.items() if k not in ['model', 'temperature', 'max_tokens']}
+            **config.additional_params
         )
     
     def get_default_configs(self) -> Dict[LLMType, LLMConfig]:
@@ -293,7 +297,7 @@ class LLMService:
             max_tokens=base_config.max_tokens,
             timeout=base_config.timeout,
             streaming=True,
-            **base_config.kwargs
+            additional_params=base_config.additional_params
         )
         
         return self.get_llm(

@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import tempfile
+import time
 import unicodedata
 from typing import Dict, List, Tuple, Any
 
@@ -21,6 +22,9 @@ from langchain.schema import Document
 from openpyxl import load_workbook
 from pptx import Presentation
 from werkzeug.datastructures import FileStorage
+from .extractTextOCR import extract_pdf_ocr
+from config import Config
+
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -129,41 +133,6 @@ async def extract_txt(file_path: str, filename: str) -> List[Document]:
     return [doc]
 
 # async def extract_pdf(file_path: str, filename: str) -> List[Document]:
-#     """Extract text from PDF files - one Document per page"""
-#     def _extract():
-#         doc = fitz.open(file_path)
-#         try:
-#             pages = []
-#             for page_num, page in enumerate(doc):
-#                 text = page.get_text()
-#                 if text.strip():  # Only include pages with content
-#                     pages.append({
-#                         "content": text,
-#                         "page_number": page_num  # 0-indexed
-#                     })
-#             return pages
-#         finally:
-#             doc.close()
-    
-#     pages_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    
-#     documents = []
-#     for page_data in pages_data:
-#         cleaned_content = clean_text(page_data["content"])
-#         if cleaned_content.strip():
-#             doc = Document(
-#                 page_content=cleaned_content,
-#                 metadata={
-#                     "source": filename,
-#                     "filename": filename,
-#                     "page": page_data["page_number"]
-#                 }
-#             )
-#             documents.append(doc)
-    
-#     return documents
-
-async def extract_pdf(file_path: str, filename: str) -> List[Document]:
     """Extract text from PDF files with enhanced Unicode/Hindi support"""
     def _extract():
         doc = fitz.open(file_path)
@@ -199,6 +168,43 @@ async def extract_pdf(file_path: str, filename: str) -> List[Document]:
             documents.append(doc)
     
     return documents
+
+
+async def extract_pdf(file_path: str, filename: str) -> List[Document]:
+    """Extract text from PDF files - one Document per page"""
+    def _extract():
+        doc = fitz.open(file_path)
+        try:
+            pages = []
+            for page_num, page in enumerate(doc):
+                text = page.get_text()
+                if text.strip():  # Only include pages with content
+                    pages.append({
+                        "content": text,
+                        "page_number": page_num  # 0-indexed
+                    })
+            return pages
+        finally:
+            doc.close()
+    
+    pages_data = await asyncio.get_event_loop().run_in_executor(None, _extract)
+    
+    documents = []
+    for page_data in pages_data:
+        cleaned_content = clean_text(page_data["content"])
+        if cleaned_content.strip():
+            doc = Document(
+                page_content=cleaned_content,
+                metadata={
+                    "source": filename,
+                    "filename": filename,
+                    "page": page_data["page_number"]
+                }
+            )
+            documents.append(doc)
+    
+    return documents
+
 
 def _extract_text_with_fallback(page):
     """
@@ -627,7 +633,8 @@ async def extract_content_from_file(file_path: str, filename: str = None) -> Dic
         if file_type == "text/plain":
             documents = await extract_txt(file_path, clean_name)
         elif file_type == "application/pdf":
-            documents = await extract_pdf(file_path, clean_name)
+            logging.info(f"OCR INITIALIZATION")
+            documents = await extract_pdf_ocr(file_path,filename) 
         elif file_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             documents = await extract_docx(file_path, clean_name)
         elif file_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
@@ -730,22 +737,6 @@ def get_text_from_files(files: List[FileStorage]) -> Tuple[List[Document], List[
         return loop.run_until_complete(_async_extract())
     finally:
         loop.close()
-
-# Legacy functions for backward compatibility
-def get_text_from_pdf(pdf_file: FileStorage) -> List[Document]:
-    """Legacy function for PDF extraction"""
-    docs, _ = get_text_from_files([pdf_file])
-    return docs
-
-def get_text_from_doc(doc_file: FileStorage) -> List[Document]:
-    """Legacy function for DOCX extraction"""
-    docs, _ = get_text_from_files([doc_file])
-    return docs
-
-def get_text_from_txt(txt_file: FileStorage) -> List[Document]:
-    """Legacy function for TXT extraction"""
-    docs, _ = get_text_from_files([txt_file])
-    return docs
 
 def process_single_file(file: FileStorage) -> Tuple[List[Document], Dict[str, Any]]:
     """Legacy function for single file processing"""

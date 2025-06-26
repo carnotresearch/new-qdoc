@@ -50,13 +50,16 @@ class BaseConfig:
     NEO4J_URI = os.getenv("NEO4J_URI")
     NEO4J_USERNAME = os.getenv("NEO4J_USERNAME")
     NEO4J_PASSWORD =  os.getenv("NEO4J_PASSWORD")
+
+    # Mistral OCR
+    MISTRAL_OCR_API_KEY = os.getenv("MISTRAL_OCR_API_KEY")
     
     @staticmethod
     def validate():
         """Validate that all required settings are present."""
         required_vars = [
             "ES_CLOUD_ID", "ES_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-            "MONGO_URL", "MYSQL_HOST", "MYSQL_USERNAME", "MYSQL_PASSWORD","NEO4J_URI","NEO4J_USERNAME","NEO4J_PASSWORD",
+            "MONGO_URL", "MYSQL_HOST", "MYSQL_USERNAME", "MYSQL_PASSWORD","NEO4J_URI","NEO4J_USERNAME","NEO4J_PASSWORD", "MISTRAL_OCR_API_KEY",
         ]
         
         missing = [var for var in required_vars if not os.getenv(var)]
@@ -131,7 +134,4 @@ class ConfigFactory:
             config_class.validate()
             
         return config_class
-    
-
-
     

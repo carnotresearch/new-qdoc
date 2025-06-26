@@ -16,27 +16,38 @@ from controllers.doc_summary import create_abstractive_summary
 from controllers.upload import store_vector
 from controllers.delete_session import delete_session
 from utils.extractText import get_text_from_files
+from .document_url_service import get_document_url_service
 
-# Configure logging
+
+
 logger = logging.getLogger(__name__)
 
-def classify_files(file_list) -> Tuple[List, List, List]:
+def classify_files(file_list) -> Tuple[List, List, List, List]:
     """
-    Separate files into document files and data files
+    Separate files into document files, data files, URL files, and unsupported files
     
     Returns:
-        Tuple of (document_files, data_files, unsupported_files)
+        Tuple of (document_files, data_files, url_files, unsupported_files)
     """
     document_extensions = {'.pdf', '.docx', '.txt', '.pptx', '.doc'}
     data_extensions = {'.csv', '.xlsx', '.xls'}
     
     document_files = []
     data_files = []
+    url_files = []
     unsupported_files = []
+    
+    # Get URL service for URL file classification
+    url_service = get_document_url_service()
+    url_files = url_service.classify_url_files(file_list)
     
     for file in file_list:
         if not file.filename:
             unsupported_files.append(file)
+            continue
+            
+        # Skip if already classified as URL file
+        if file in url_files:
             continue
             
         ext = os.path.splitext(file.filename)[1].lower()
@@ -48,7 +59,9 @@ def classify_files(file_list) -> Tuple[List, List, List]:
         else:
             unsupported_files.append(file)
     
-    return document_files, data_files, unsupported_files
+    return document_files, data_files, url_files, unsupported_files
+
+
 
 def process_document_files(doc_files: List, user_session: str, is_new_container: bool) -> Dict[str, Any]:
     """
@@ -74,14 +87,11 @@ def process_document_files(doc_files: List, user_session: str, is_new_container:
                 "file_details": file_infos
             }
         
-        # Create session directory if needed
         user_session_dir = os.path.join('users', user_session)
         os.makedirs(user_session_dir, exist_ok=True)
         
-        # Store documents as vectors
         store_vector([all_docs], user_session, is_new_container, file_infos)
         
-        # Create summaries asynchronously
         threading.Thread(target=create_abstractive_summary, args=(user_session,)).start()
         
         successful_files = sum(1 for info in file_infos if info.get('success', False))
@@ -184,8 +194,16 @@ class DocumentService:
                 "message": "Please upload files in PDF, DOC, DOCX, PPTX, TXT, CSV, or XLSX format."
             }
         
+        # ✅ ADD: Log incoming files for debugging
+        logger.info(f"Received {len(file_list)} files for processing")
+        for i, file in enumerate(file_list):
+            logger.info(f"File {i+1}: {file.filename} (type: {file.content_type})")
+
         # Classify files by type
-        document_files, data_files, unsupported_files = classify_files(file_list)
+        document_files, data_files, url_files, unsupported_files = classify_files(file_list)
+        
+        # ✅ ADD: Log classification results
+        logger.info(f"File classification: {len(document_files)} documents, {len(data_files)} data files, {len(url_files)} URL files, {len(unsupported_files)} unsupported")
         
         # Check for unsupported files
         if unsupported_files:
@@ -200,10 +218,10 @@ class DocumentService:
             }
         
         # Check if we have any processable files
-        if not document_files and not data_files:
+        if not document_files and not data_files and not url_files:
             return {
                 "status": "error",
-                "message": "No valid files were found. Please upload files in PDF, DOC, DOCX, TXT, CSV, or XLSX format."
+                "message": "No valid files were found. Please upload files in PDF, DOC, DOCX, TXT, CSV, XLSX, or URL format."
             }
         
         # Delete previous session if needed for trial users
@@ -220,11 +238,18 @@ class DocumentService:
         # Process document files (PDF, DOCX, TXT)
         doc_result = process_document_files(document_files, user_session, is_new_container)
         
-        # Combine results
-        total_processed = data_result["files_processed"] + doc_result["files_processed"]
-        total_successful = data_result.get("files_successful", 0) + doc_result.get("files_successful", 0)
+        # Process URL files using dedicated URL service
+        url_service = get_document_url_service()
+        url_result = url_service.process_url_files(url_files, user_session, is_new_container)
         
-        all_file_details = data_result["file_details"] + doc_result["file_details"]
+        # ✅ ADD: Log processing results
+        logger.info(f"Processing results - Data: {data_result['success']}, Documents: {doc_result['success']}, URLs: {url_result['success']}")
+        
+        # Combine results
+        total_processed = data_result["files_processed"] + doc_result["files_processed"] + url_result["files_processed"]
+        total_successful = data_result.get("files_successful", 0) + doc_result.get("files_successful", 0) + url_result.get("files_successful", 0)
+        
+        all_file_details = data_result["file_details"] + doc_result["file_details"] + url_result["file_details"]
         
         # Add unsupported files to details
         for unsupported_file in unsupported_files:
@@ -235,22 +260,32 @@ class DocumentService:
             })
         
         # Determine overall success
-        overall_success = data_result["success"] and doc_result["success"]
+        overall_success = data_result["success"] and doc_result["success"] and url_result["success"]
         
+        # ✅ ADD: Enhanced success response with URL information
         if overall_success and total_successful > 0:
-            return {
+            response_data = {
                 "status": "ok",
                 "message": "Files successfully uploaded.",
                 "files_processed": total_processed,
                 "files_successful": total_successful,
                 "file_details": all_file_details
             }
+            
+            # Add URL-specific information if URLs were processed
+            if url_result["files_processed"] > 0:
+                response_data["urls_processed"] = url_result["files_processed"]
+                response_data["urls_successful"] = url_result.get("files_successful", 0)
+                
+            return response_data
         else:
             error_messages = []
             if not data_result["success"]:
                 error_messages.append(data_result.get("message", "Data file processing failed"))
             if not doc_result["success"]:
                 error_messages.append(doc_result.get("message", "Document file processing failed"))
+            if not url_result["success"]:
+                error_messages.append(url_result.get("message", "URL file processing failed"))
             
             return {
                 "status": "error",

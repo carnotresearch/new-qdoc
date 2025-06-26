@@ -8,10 +8,12 @@ import logging
 from flask import Blueprint, request, jsonify
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 import re
+import time
 import json
 import os
 from app.services.auth_service import get_auth_service
 from app.services.document_service import get_document_service
+from app.services.document_url_service import get_document_url_service
 from app.services.create_dense_graph_service import process_text_file_dense
 from app.services.create_highlevel_graph_service import process_text_file
 from utils.neo4j_helper import save_neo4j_graph, fetch_neo4j_graph_data
@@ -52,11 +54,25 @@ def free_trial():
         fingerprint = request.form.get('fingerprint')
         if not fingerprint:
             return jsonify({'message': 'Fingerprint is missing'}), 400
+        
+        # Check for URLs in form data
+        urls = request.form.getlist('urls')
             
         # Process files
         result = document_service.process_files(
             request.files, fingerprint, is_new_container=True, is_trial=True
         )
+        
+        # Process URLs if provided (trial users can use URLs)
+        if urls:
+            url_service = get_document_url_service()
+            url_result = url_service.process_urls_directly(urls, fingerprint, is_new_container=False)
+            
+            # Merge results
+            if url_result.get('success'):
+                result['files_processed'] += url_result.get('files_processed', 0)
+                result['files_successful'] += url_result.get('files_successful', 0)
+                result['file_details'].extend(url_result.get('file_details', []))
         
         if result.get("status") == "error":
             return jsonify({'message': result.get("message")}), 400
@@ -100,10 +116,24 @@ def upload():
         logger.exception(f'Authentication error: {e}')
         return jsonify({'message': 'Token decoding failed!'}), 401
     
+    # Check for URLs in form data
+    urls = request.form.getlist('urls')
+    
     # Process files
     result = document_service.process_files(
         request.files, user_session, is_new_container=True, is_trial=False
     )
+    
+    # Process URLs if provided
+    if urls:
+        url_service = get_document_url_service()
+        url_result = url_service.process_urls_directly(urls, user_session, is_new_container=False)
+        
+        # Merge results
+        if url_result.get('success'):
+            result['files_processed'] += url_result.get('files_processed', 0)
+            result['files_successful'] += url_result.get('files_successful', 0)
+            result['file_details'].extend(url_result.get('file_details', []))
     
     if result.get("status") == "error":
         return jsonify({'message': result.get("message")}), 400
@@ -140,10 +170,24 @@ def add_upload():
         logger.exception(f'Authentication error: {e}')
         return jsonify({'message': 'Token decoding failed!'}), 401
     
+    # Check for URLs in form data
+    urls = request.form.getlist('urls')
+    
     # Process files
     result = document_service.process_files(
         request.files, user_session, is_new_container=False, is_trial=False
     )
+    
+    # Process URLs if provided
+    if urls:
+        url_service = get_document_url_service()
+        url_result = url_service.process_urls_directly(urls, user_session, is_new_container=False)
+        
+        # Merge results
+        if url_result.get('success'):
+            result['files_processed'] += url_result.get('files_processed', 0)
+            result['files_successful'] += url_result.get('files_successful', 0)
+            result['file_details'].extend(url_result.get('file_details', []))
     
     if result.get("status") == "error":
         return jsonify({'message': result.get("message")}), 400
@@ -213,10 +257,13 @@ def create_knowledge_graph():
 
         # Start async processing
         is_dense = request.form.get('isDense', 'false').lower() == 'true'
+        kg_start_time = time.perf_counter()
         threading.Thread(
             target=async_process_graph,
             args=(file_names, user_session, session_id, output_dir, is_dense)
         ).start()
+        kg_end_time = time.perf_counter()
+        print(f"Knowledge Graph Latency: {kg_end_time - kg_start_time:.6f} seconds")
 
         return jsonify({
             'message': 'Knowledge graph creation started',
@@ -231,6 +278,7 @@ def create_knowledge_graph():
         }), 500
 
 def async_process_graph(file_names, user_session, session_id, output_dir, is_dense):
+    
     try:
         for file_name in file_names:
             file_name = re.sub(r'\.[^.\\/:*?"<>|\r\n]+$', '', file_name)

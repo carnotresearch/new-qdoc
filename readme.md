@@ -1,142 +1,308 @@
-# Document Intelligence Platform
+# icarKno - Document Intelligence Platform
 
-A comprehensive solution for extracting text from various document formats, processing it with AI, generating knowledge graphs, and providing a conversational interface for document queries.
+> An AI-powered document analysis platform that enables intelligent querying, summarization, and knowledge extraction from various document formats.
 
-## Features
+[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Flask](https://img.shields.io/badge/flask-2.3+-green.svg)](https://flask.palletsprojects.com/)
+[![License](https://img.shields.io/badge/license-proprietary-red.svg)](LICENSE)
 
-- **Multi-format Document Processing**: Support for PDF, DOCX, DOC, TXT, CSV, and XLSX files
-- **Vector Search**: Efficient document retrieval using Elasticsearch and vector embeddings
-- **Knowledge Graph Generation**: Visual representation of relationships within documents
-- **AI-powered Q&A**: Answer questions about documents using LLMs
-- **Document Summarization**: Generate comprehensive document summaries
-- **WhatsApp Integration**: Chat with your documents via WhatsApp
-- **Multi-language Support**: Interface in various languages using translation APIs
-- **Database Integration**: Store and query structured data from CSV/Excel files
-- **User Management**: Free trial and paid subscription tiers
+## ✨ Features
 
-## Project Structure
+### 📄 Document Processing
 
-```
-.
-├── app.py                      # Main Flask application
-├── controllers/                # Business logic controllers
-│   ├── __init__.py
-│   ├── ask.py                  # Document query processing
-│   ├── database.py             # Database operations
-│   ├── doc_summary.py          # Document summarization
-│   └── upload.py               # File upload processing
-├── graph.py                    # Knowledge graph generation
-├── local/
-│   └── cleanup_sessions.py     # Session cleanup utility
-├── requirements.txt            # Project dependencies
-├── utils/                      # Utility modules
-│   ├── __init__.py
-│   └── extractText.py          # Text extraction from files
-└── webhook/                    # WhatsApp integration
-    ├── __init__.py
-    ├── webhook.py              # Webhook routes
-    ├── decorators/             # Route decorators
-    │   ├── __init__.py
-    │   └── security.py         # Webhook verification
-    ├── services/               # Service modules
-    │   ├── __init__.py
-    │   ├── db_operations.py    # Message tracking
-    │   ├── demo_service.py     # Demo response generation
-    │   ├── openai_service.py   # OpenAI integration
-    │   └── sessionInfo.py      # Session management
-    └── utils/                  # Webhook utilities
-        ├── __init__.py
-        └── whatsapp_utils.py   # WhatsApp API utilities
-```
+- **Multi-format Support**: PDF, DOCX, DOC, TXT, PPTX, CSV, XLSX
+- **Intelligent Chunking**: Hierarchical text segmentation for optimal retrieval
+- **Vector Embeddings**: Advanced semantic search using OpenAI embeddings
 
-## Installation
+### 🔍 Smart Search & Retrieval
 
-1. Clone the repository:
+- **Hybrid Search**: Combines keyword and vector search for best results
+- **Contextual Answers**: AI-powered responses with source citations
+- **Creative Reasoning**: Advanced multi-step analysis for complex queries
+
+### 🧠 AI Capabilities
+
+- **Document Summarization**: Extractive and abstractive summaries
+- **Question Answering**: Natural language queries with source attribution
+- **Knowledge Graphs**: Visual representation of document relationships
+- **Multi-language**: Support for 23+ languages including Hindi, Tamil, Bengali
+
+### 📊 Data Integration
+
+- **Structured Data**: Query CSV/Excel files using natural language
+- **SQL Generation**: Automatic conversion of questions to database queries
+- **Hybrid Analysis**: Combine document insights with data analytics
+
+### 🌐 Integration & Access
+
+- **REST API**: Complete programmatic access
+- **WhatsApp Bot**: Chat with your documents via WhatsApp
+- **Web Interface**: User-friendly document upload and query interface
+- **Authentication**: JWT-based secure access with subscription tiers
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.8 or higher
+- Elasticsearch cluster (cloud or self-hosted)
+- OpenAI API access
+- MySQL database
+- MongoDB instance
+
+### Installation
+
+1. **Clone the repository**
+
    ```bash
-   git clone https://github.com/your-username/document-intelligence.git
-   cd document-intelligence
+   git clone https://github.com/your-org/icarkno.git
+   cd icarkno
    ```
 
-2. Create a virtual environment:
+2. **Create virtual environment**
+
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. Install dependencies:
+3. **Install dependencies**
+
    ```bash
    pip install -r requirements.txt
    ```
 
-4. Set up environment variables in a `.env` file:
+4. **Environment setup**
+
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
    ```
+
+5. **Configure environment variables**
+
+   ```env
+   # Elasticsearch
    ES_CLOUD_ID=your-elasticsearch-cloud-id
    ES_API_KEY=your-elasticsearch-api-key
+
+   # OpenAI
    OPENAI_API_KEY=your-openai-api-key
-   MYSQL_USERNAME=your-mysql-username
-   MYSQL_PASSWORD=your-mysql-password
+
+   # Database
+   MONGO_URL=mongodb://localhost:27017/icarkno
+   MYSQL_HOST=localhost
+   MYSQL_USERNAME=your-username
+   MYSQL_PASSWORD=your-password
+
+   # Security
+   JWT_SECRET_KEY=your-jwt-secret
+   SECRET_KEY=your-flask-secret
+
+   # Neo4j (for knowledge graphs)
+   NEO4J_URI=bolt://localhost:7687
+   NEO4J_USERNAME=neo4j
+   NEO4J_PASSWORD=your-password
    ```
 
-## Running the Application
+6. **Run the application**
+   ```bash
+   python run.py
+   ```
 
-### Flask API Server
+The API will be available at `http://localhost:5000`
+
+## 📖 Usage
+
+### Basic Document Processing
 
 ```bash
-python app.py
+# Upload documents
+curl -X POST http://localhost:5000/upload \
+  -F "files=@document.pdf" \
+  -F "token=your-jwt-token" \
+  -F "sessionId=session123"
+
+# Query documents
+curl -X POST http://localhost:5000/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "your-jwt-token",
+    "sessionId": "session123",
+    "message": "What are the key findings?",
+    "context": true
+  }'
 ```
 
-The Flask API will be available at `http://127.0.0.1:5000`.
-
-### FastAPI Server
+### Free Trial Mode
 
 ```bash
-uvicorn custom_api:app --host 0.0.0.0 --port 8000 --reload
+# Upload for trial users
+curl -X POST http://localhost:5000/freeTrial \
+  -F "files=@document.pdf" \
+  -F "fingerprint=unique-browser-fingerprint"
+
+# Query in trial mode
+curl -X POST http://localhost:5000/trialAsk \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fingerprint": "unique-browser-fingerprint",
+    "message": "Summarize this document"
+  }'
 ```
 
-The FastAPI documentation will be available at `http://127.0.0.1:8000/docs`.
+### Advanced Features
 
-## API Endpoints
+- **Creative Mode**: Add `"mode": "creative"` for multi-step reasoning
+- **Knowledge Graphs**: Use `/create_graph` endpoint for visual relationships
+- **Multi-language**: Set `"outputLanguage": 1` for Hindi responses
+- **Data Queries**: Upload CSV/Excel and query with natural language
 
-### Document Processing
-- `POST /upload`: Upload documents
-- `POST /add-upload`: Add documents to existing session
-- `POST /freeTrial`: Process documents in free trial mode
+## 🏗️ Architecture
 
-### Document Querying
-- `POST /ask`: Query documents
-- `POST /trialAsk`: Query documents in free trial mode
-- `POST /demo`: Demo mode for public transport queries
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Client Apps   │    │   Flask API      │    │   AI Services   │
+│                 │────│                  │────│                 │
+│ • Web Interface │    │ • Authentication │    │ • OpenAI GPT    │
+│ • WhatsApp Bot  │    │ • Rate Limiting  │    │ • Embeddings    │
+│ • Mobile App    │    │ • File Processing│    │ • Summarization │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                                │
+                       ┌────────┴────────┐
+                       │   Data Layer    │
+                       │                 │
+                       │ • Elasticsearch │
+                       │ • MongoDB       │
+                       │ • MySQL         │
+                       │ • Neo4j         │
+                       └─────────────────┘
+```
 
-### Account Management
-- `POST /updatepayment`: Update user payment plan
-- `POST /check-payment-status`: Check remaining subscription time
+## 📁 Project Structure
 
-### WhatsApp Webhook
-- `GET|POST /api/webhook`: WhatsApp integration webhook
+```
+icarkno/
+├── app/                    # Flask application
+│   ├── __init__.py        # App factory
+│   ├── api/               # API blueprints
+│   ├── services/          # Business logic
+│   └── config.py          # Configuration
+├── controllers/           # Legacy controllers
+├── elastic/              # Elasticsearch integration
+├── utils/                # Utilities
+├── webhook/              # WhatsApp integration
+├── requirements.txt      # Dependencies
+├── run.py               # Application entry point
+└── README.md            # This file
+```
 
-## External Integrations
+## 🔧 Configuration
 
-- **Elasticsearch**: Vector storage and retrieval
-- **OpenAI**: LLM for question answering and summarization
-- **MongoDB**: User and session management
-- **MySQL**: Structured data storage for CSV/Excel files
-- **WhatsApp API**: Conversational interface
+### Environment Variables
 
-## Notes for Deployment
+| Variable         | Description               | Required |
+| ---------------- | ------------------------- | -------- |
+| `ES_CLOUD_ID`    | Elasticsearch Cloud ID    | Yes      |
+| `ES_API_KEY`     | Elasticsearch API Key     | Yes      |
+| `OPENAI_API_KEY` | OpenAI API Key            | Yes      |
+| `MONGO_URL`      | MongoDB connection string | Yes      |
+| `MYSQL_HOST`     | MySQL host                | Yes      |
+| `JWT_SECRET_KEY` | JWT signing key           | Yes      |
+| `NEO4J_URI`      | Neo4j connection URI      | Optional |
 
-- For production, use a WSGI server like Gunicorn instead of the built-in Flask server
-- Set up SSL certificates for secure HTTPS connections
-- Configure proper database backups and monitoring
-- Implement rate limiting for public endpoints
+### Supported File Formats
 
-## Future Enhancements
+- **Documents**: PDF, DOCX, DOC, TXT, PPTX
+- **Data**: CSV, XLSX, XLS
+- **Max file size**: 50MB per file
+- **Supported languages**: 23+ languages
 
-- Integration with additional document formats
-- Advanced OCR for image-based documents
-- Multi-model support for different LLM backends
-- Custom training for domain-specific document understanding
-- Advanced analytics on document usage and query patterns
+## 🔌 API Reference
 
-## License
+See [API Documentation](api-documentation.md) for detailed endpoint information.
 
-This project is proprietary and confidential.
+### Key Endpoints
+
+- `POST /upload` - Upload documents
+- `POST /ask` - Query documents
+- `POST /freeTrial` - Trial mode upload
+- `POST /trialAsk` - Trial mode queries
+- `POST /updatepayment` - Manage subscriptions
+- `GET /healthcheck` - Health status
+
+## 🧪 Testing
+
+### Unit Tests
+
+```bash
+python -m pytest tests/
+```
+
+### Integration Tests
+
+```bash
+# Test document processing
+python upload_to_elastic.py --file test.pdf --index test_index
+
+# Test querying
+python query_elastic.py --index test_index --query "test question"
+```
+
+## 🚀 Deployment
+
+### Docker (Recommended)
+
+```bash
+docker build -t icarkno .
+docker run -p 5000:5000 --env-file .env icarkno
+```
+
+### Production Setup
+
+```bash
+# Using Gunicorn
+gunicorn --bind 0.0.0.0:5000 --workers 4 run:app
+
+# With SSL
+gunicorn --bind 0.0.0.0:443 --certfile cert.pem --keyfile key.pem run:app
+```
+
+## 📊 Performance
+
+- **Processing Speed**: ~2-5 seconds per page
+- **Concurrent Users**: Supports 100+ simultaneous users
+- **Storage**: Elasticsearch scales horizontally
+- **Languages**: 23+ supported with translation API
+- **Rate Limits**: Configurable per user tier
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📝 License
+
+This project is proprietary software. See [LICENSE](LICENSE) for details.
+
+## 🆘 Support
+
+- **Documentation**: [API Docs](api-documentation.md)
+- **Issues**: [GitHub Issues](https://github.com/your-org/icarkno/issues)
+- **Email**: support@carnotresearch.com
+
+## 🙏 Acknowledgments
+
+- [OpenAI](https://openai.com) for GPT and embedding models
+- [Elasticsearch](https://elastic.co) for search and analytics
+- [LangChain](https://langchain.com) for LLM orchestration
+- [Flask](https://flask.palletsprojects.com) for the web framework
+
+---
+
+<p align="center">
+  Made with ❤️ by <a href="https://carnotresearch.com">Carnot Research</a>
+</p>

@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_experimental.graph_transformers.llm import UnstructuredRelation
 from langchain_core.messages import SystemMessage
-from langchain_community.graphs import Neo4jGraph
+from langchain_neo4j import Neo4jGraph
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
 from langchain_core.output_parsers import JsonOutputParser
 from sentence_transformers import SentenceTransformer, util

@@ -2,6 +2,7 @@ import os
 import pickle
 import json_repair
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from pydantic import BaseModel
@@ -10,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_experimental.graph_transformers.llm import UnstructuredRelation
 from langchain_core.messages import SystemMessage
-from langchain_community.graphs import Neo4jGraph
+from langchain_neo4j import Neo4jGraph
 from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
 from langchain_core.output_parsers import JsonOutputParser
 from sentence_transformers import SentenceTransformer, util
@@ -63,27 +64,129 @@ def create_session_scoped_id(entity_name: str, session_id: str) -> str:
     """Create a session-scoped unique ID for an entity"""
     return f"{session_id}_{entity_name}"
 
+# def resolve_entity(entity_name: str, entity_type: str, session_id: str) -> tuple:
+#     """Resolve entity name to canonical form using similarity within the same session"""
+#     entity_embedding = embedding_model.encode(entity_name, convert_to_tensor=True)
+    
+#     # Get session-specific entity memory
+#     entity_memory = get_session_entity_memory_dense(session_id)
+    
+#     # Only check entities from the same session
+#     for canonical, data in entity_memory.items():
+#         if data.get('session_id') == session_id:
+#             sim = util.cos_sim(entity_embedding, data['embedding']).item()
+#             if sim >= SIMILARITY_THRESHOLD and entity_type == data['type']:
+#                 return canonical, True
+    
+#     # Store with session_id in session-specific memory
+#     entity_memory[entity_name] = {
+#         'embedding': entity_embedding, 
+#         'type': entity_type,
+#         'session_id': session_id
+#     }
+#     return entity_name, False
+
+
+def is_numeric_entity(entity_name: str) -> bool:
+    """Check if an entity is primarily numeric"""
+    # Remove common separators and check if it's mostly digits
+    cleaned = re.sub(r'[,.\-\s]', '', entity_name.strip())
+    if not cleaned:
+        return False
+    
+    # Check if it's a pure number (including decimals, negatives, percentages)
+    number_patterns = [
+        r'^\d+$',                    # Pure integers: 123
+        r'^\d+\.\d+$',              # Decimals: 123.45
+        r'^-?\d+(\.\d+)?$',         # Negative numbers: -123.45
+        r'^\d+(\.\d+)?%$',          # Percentages: 23.5%
+        r'^\$?\d+(\.\d+)?$',        # Currency: $123.45
+        r'^\d{1,3}(,\d{3})*(\.\d+)?$',  # Formatted numbers: 1,234.56
+    ]
+    
+    for pattern in number_patterns:
+        if re.match(pattern, entity_name.strip()):
+            return True
+    
+    # Check if it's mostly digits (at least 60% digits)
+    digit_count = sum(1 for c in cleaned if c.isdigit())
+    return len(cleaned) > 0 and (digit_count / len(cleaned)) >= 0.6
+
+def should_use_exact_matching(entity_name: str, entity_type: str) -> bool:
+    """Determine if an entity should use exact matching instead of similarity"""
+    # Entity types that should always use exact matching
+    exact_match_types = {
+        'Number', 'Date', 'Time', 'Year', 'ID', 'Code', 
+        'Identifier', 'Reference', 'Serial', 'Version'
+    }
+    
+    # Check entity type
+    if entity_type in exact_match_types:
+        return True
+    
+    # Check if entity looks numeric
+    if is_numeric_entity(entity_name):
+        return True
+    
+    # Check for other patterns that should use exact matching
+    exact_match_patterns = [
+        r'^[A-Z]{2,}-\d+$',         # Codes like ABC-123
+        r'^\d{4}-\d{2}-\d{2}$',     # Dates like 2023-12-25
+        r'^v?\d+\.\d+(\.\d+)?$',    # Versions like v1.2.3 or 1.2.3
+        r'^[A-Z0-9]{8,}$',          # Long alphanumeric codes
+    ]
+    
+    for pattern in exact_match_patterns:
+        if re.match(pattern, entity_name.strip()):
+            return True
+    
+    return False
+
 def resolve_entity(entity_name: str, entity_type: str, session_id: str) -> tuple:
     """Resolve entity name to canonical form using similarity within the same session"""
-    entity_embedding = embedding_model.encode(entity_name, convert_to_tensor=True)
     
     # Get session-specific entity memory
     entity_memory = get_session_entity_memory_dense(session_id)
     
-    # Only check entities from the same session
+    # Check if this entity should use exact matching
+    if should_use_exact_matching(entity_name, entity_type):
+        # Use exact string matching for numeric/exact entities
+        for canonical, data in entity_memory.items():
+            if (data.get('session_id') == session_id and 
+                entity_type == data['type'] and
+                canonical.lower().strip() == entity_name.lower().strip()):
+                return canonical, True
+        
+        # Store without embedding for exact-match entities
+        entity_memory[entity_name] = {
+            'embedding': None,  # No embedding needed for exact match
+            'type': entity_type,
+            'session_id': session_id,
+            'exact_match': True
+        }
+        return entity_name, False
+    
+    # Use similarity-based matching for other entities
+    entity_embedding = embedding_model.encode(entity_name, convert_to_tensor=True)
+    
+    # Only check entities from the same session that use similarity matching
     for canonical, data in entity_memory.items():
-        if data.get('session_id') == session_id:
+        if (data.get('session_id') == session_id and 
+            not data.get('exact_match', False) and  # Skip exact-match entities
+            data.get('embedding') is not None):
             sim = util.cos_sim(entity_embedding, data['embedding']).item()
             if sim >= SIMILARITY_THRESHOLD and entity_type == data['type']:
                 return canonical, True
     
-    # Store with session_id in session-specific memory
+    # Store with embedding for similarity-based entities
     entity_memory[entity_name] = {
         'embedding': entity_embedding, 
         'type': entity_type,
-        'session_id': session_id
+        'session_id': session_id,
+        'exact_match': False
     }
     return entity_name, False
+
 
 def parse_important_sentences_file(file_path: str) -> List[Document]:
     """Parse a file containing important sentences as a single block of text"""
@@ -253,7 +356,7 @@ def process_text_file(input_file: str, session_id: str, file_name: str, meta: Op
         list: The graph data that was stored in Neo4j
     """
 
-    logger.info(f"Creating Dense Graph from important sentences")
+    logger.info(f"Creating High-level Graph from important sentences")
     
     if graph is None or llm is None or embedding_model is None:
         initialize_globals()
