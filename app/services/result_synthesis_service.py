@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from app.services.search_execution_service import SearchResult
 from app.services.reasoning_strategy_service import SearchStrategy
 from app.services.llm_service import get_comprehensive_llm, get_streaming_llm, LLMType
+from langchain.callbacks.base import BaseCallbackHandler
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -240,8 +241,6 @@ CRITICAL INSTRUCTIONS:
             
             # Format content (truncate if too long)
             content = result.content
-            # if len(content) > 40000:
-            #     content = content[:40000] + "... [truncated]"
             
             formatted_results.append(f"{source_header}:\n{content}\n")
         
@@ -530,54 +529,59 @@ CRITICAL INSTRUCTIONS:
         )
 
         try:
-            from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+            # Create a custom callback for streaming
+            class StreamingCallback(BaseCallbackHandler):
+                def __init__(self, yield_func):
+                    self.buffer = ""
+                    self.is_first = True
+                    self.yield_func = yield_func
 
-            # This will yield from inside a closure
-            def get_callback(yield_func):
-                class StreamingCallback(StreamingStdOutCallbackHandler):
-                    def __init__(self):
+                def on_llm_new_token(self, token: str, **kwargs) -> None:
+                    self.buffer += token
+                    # Yield when we have a complete sentence or enough content
+                    if (token in '.!?\n' and len(self.buffer) > 50) or len(self.buffer) > 100:
+                        self.yield_func({
+                            'type': 'answer_chunk',
+                            'content': self.buffer,
+                            'is_first': self.is_first
+                        })
+                        self.is_first = False
                         self.buffer = ""
-                        self.is_first = True
 
-                    def on_llm_new_token(self, token: str, **kwargs) -> None:
-                        self.buffer += token
-                        if token in '.!?\n' and len(self.buffer) > 50:
-                            yield_func({
-                                'type': 'answer_chunk',
-                                'content': self.buffer,
-                                'is_first': self.is_first
-                            })
-                            self.is_first = False
-                            self.buffer = ""
+                def on_llm_end(self, response, **kwargs) -> None:
+                    if self.buffer:
+                        self.yield_func({
+                            'type': 'answer_chunk',
+                            'content': self.buffer,
+                            'is_first': self.is_first
+                        })
 
-                    def on_llm_end(self, response, **kwargs) -> None:
-                        if self.buffer:
-                            yield_func({
-                                'type': 'answer_chunk',
-                                'content': self.buffer,
-                                'is_first': self.is_first
-                            })
+            # Storage for yielded data
+            yielded_data = []
+            
+            def capture_yield(data):
+                yielded_data.append(data)
 
-                return StreamingCallback()
+            # Create callback
+            callback = StreamingCallback(capture_yield)
 
-            # Create callback instance that calls this generator's yield
-            def stream_yield(data):
-                nonlocal yielded  # prevent re-yielding same chunks
-                yield_queue.append(data)
-
-            yield_queue = []
-            yielded = False
-            callback = get_callback(stream_yield)
-
-            # Get streaming LLM
-            streaming_llm = get_streaming_llm(LLMType.COMPREHENSIVE)
+            # Get streaming LLM with callback
+            streaming_llm = get_streaming_llm(LLMType.COMPREHENSIVE, callbacks=[callback])
 
             # Run inference
-            _ = streaming_llm.invoke(synthesis_prompt)
+            response = streaming_llm.invoke(synthesis_prompt)
 
-            # Yield the captured chunks from the queue
-            for item in yield_queue:
+            # Yield all captured chunks
+            for item in yielded_data:
                 yield item
+
+            # If no chunks were yielded (fallback), yield the complete response
+            if not yielded_data:
+                yield {
+                    'type': 'answer_chunk',
+                    'content': response.content if hasattr(response, 'content') else str(response),
+                    'is_first': True
+                }
 
             # Extract and send sources
             sources = self._extract_sources_used(successful_results)

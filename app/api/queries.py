@@ -135,7 +135,8 @@ def ask_stream():
     mode = data.get('mode', 'default')
     if mode != 'creative':
         # For non-creative mode, redirect to regular endpoint
-        return query_service.process_authenticated_query(data, user_email, session_name)
+        response, status_code = query_service.process_authenticated_query(data, user_email, session_name)
+        return jsonify(response), status_code
     
     # Generate streaming response
     def generate():

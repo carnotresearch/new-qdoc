@@ -8,12 +8,13 @@ making it easy to switch between different providers and configurations.
 import logging
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 from dataclasses import dataclass
 
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.base_language import BaseLanguageModel
+from langchain.callbacks.base import BaseCallbackHandler
 from config import Config
 
 # Configure logging
@@ -23,9 +24,6 @@ class LLMProvider(Enum):
     """Available LLM providers."""
     OPENAI = "openai"
     GOOGLE = "google"
-    # Add more providers as needed
-    # ANTHROPIC = "anthropic"
-    # AZURE = "azure"
 
 class LLMType(Enum):
     """Different LLM configurations for different use cases."""
@@ -43,11 +41,14 @@ class LLMConfig:
     max_tokens: Optional[int] = None
     timeout: Optional[int] = None
     streaming: bool = False
+    callbacks: Optional[List[BaseCallbackHandler]] = None
     additional_params: Dict[str, Any] = None
     
     def __post_init__(self):
         if self.additional_params is None:
             self.additional_params = {}
+        if self.callbacks is None:
+            self.callbacks = []
 
 class BaseLLMFactory(ABC):
     """Abstract base class for LLM factories."""
@@ -70,15 +71,22 @@ class OpenAILLMFactory(BaseLLMFactory):
     
     def create_llm(self, config: LLMConfig) -> ChatOpenAI:
         """Create a ChatOpenAI instance."""
-        return ChatOpenAI(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            timeout=config.timeout,
-            streaming=config.streaming,
-            api_key=self.api_key,
+        # Prepare parameters
+        params = {
+            "model": config.model,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+            "timeout": config.timeout,
+            "streaming": config.streaming,
+            "api_key": self.api_key,
             **config.additional_params
-        )
+        }
+        
+        # Add callbacks if provided
+        if config.callbacks:
+            params["callbacks"] = config.callbacks
+            
+        return ChatOpenAI(**params)
     
     def get_default_configs(self) -> Dict[LLMType, LLMConfig]:
         """Get default OpenAI configurations."""
@@ -123,13 +131,20 @@ class GoogleLLMFactory(BaseLLMFactory):
     
     def create_llm(self, config: LLMConfig) -> ChatGoogleGenerativeAI:
         """Create a ChatGoogleGenerativeAI instance."""
-        return ChatGoogleGenerativeAI(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            google_api_key=self.api_key,
+        # Prepare parameters
+        params = {
+            "model": config.model,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+            "google_api_key": self.api_key,
             **config.additional_params
-        )
+        }
+        
+        # Add callbacks if provided (Gemini also supports callbacks)
+        if config.callbacks:
+            params["callbacks"] = config.callbacks
+            
+        return ChatGoogleGenerativeAI(**params)
     
     def get_default_configs(self) -> Dict[LLMType, LLMConfig]:
         """Get default Google configurations."""
@@ -243,10 +258,13 @@ class LLMService:
             logger.warning(f"Provider {provider} not available, using default {self._default_provider}")
             provider = self._default_provider
         
-        # Create cache key
+        # Create cache key (don't cache if custom config has callbacks)
         cache_key = f"{provider.value}_{llm_type.value}"
         if custom_config:
             cache_key += f"_custom_{hash(str(custom_config))}"
+            # Don't cache if callbacks are present
+            if custom_config.callbacks:
+                cache = False
         
         # Return cached instance if available
         if cache and cache_key in self._cached_llms:
@@ -268,8 +286,8 @@ class LLMService:
         try:
             llm = factory.create_llm(config)
             
-            # Cache if enabled
-            if cache:
+            # Cache if enabled and no callbacks
+            if cache and not config.callbacks:
                 self._cached_llms[cache_key] = llm
             
             logger.debug(f"Created LLM: {provider.value} {llm_type.value} {config.model}")
@@ -282,9 +300,20 @@ class LLMService:
     def get_streaming_llm(
         self,
         llm_type: LLMType = LLMType.STANDARD,
-        provider: Optional[LLMProvider] = None
+        provider: Optional[LLMProvider] = None,
+        callbacks: Optional[List[BaseCallbackHandler]] = None
     ) -> BaseLanguageModel:
-        """Get a streaming-enabled LLM instance."""
+        """
+        Get a streaming-enabled LLM instance.
+        
+        Args:
+            llm_type: Type of LLM configuration to use
+            provider: LLM provider (uses default if None)
+            callbacks: List of callback handlers for streaming
+            
+        Returns:
+            Streaming-enabled LLM instance
+        """
         # Get base config and enable streaming
         factory = self._factories.get(provider or self._default_provider)
         if not factory:
@@ -297,6 +326,7 @@ class LLMService:
             max_tokens=base_config.max_tokens,
             timeout=base_config.timeout,
             streaming=True,
+            callbacks=callbacks or [],
             additional_params=base_config.additional_params
         )
         
@@ -304,7 +334,7 @@ class LLMService:
             llm_type=llm_type,
             provider=provider,
             custom_config=streaming_config,
-            cache=False  # Don't cache streaming instances
+            cache=False  # Don't cache streaming instances with callbacks
         )
     
     def clear_cache(self):
@@ -374,9 +404,10 @@ def get_code_llm() -> BaseLanguageModel:
     """Get a code-focused LLM."""
     return get_llm_service().get_llm(LLMType.CODE)
 
-def get_streaming_llm(llm_type: LLMType = LLMType.STANDARD) -> BaseLanguageModel:
-    """Get a streaming LLM."""
-    return get_llm_service().get_streaming_llm(llm_type)
+def get_streaming_llm(llm_type: LLMType = LLMType.STANDARD, 
+                     callbacks: Optional[List[BaseCallbackHandler]] = None) -> BaseLanguageModel:
+    """Get a streaming LLM with callbacks."""
+    return get_llm_service().get_streaming_llm(llm_type, callbacks=callbacks)
 
 # Configuration functions
 def set_default_provider(provider: Union[LLMProvider, str]):
